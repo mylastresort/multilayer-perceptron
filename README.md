@@ -5,6 +5,7 @@
 ![CI](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/commitlint.yml/badge.svg)
 ![Benchmarks](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/benchmark.yml/badge.svg)
 ![Release](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/release.yml/badge.svg)
+<img src="https://img.shields.io/badge/coverage-0.0%25-orange" alt="Coverage">
 
 ---
 
@@ -34,4 +35,3 @@ cd <!-- repo -->
 ## License
 
 <!-- MIT / Apache-2.0 / etc. -->
-test

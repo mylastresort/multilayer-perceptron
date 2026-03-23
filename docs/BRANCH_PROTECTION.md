@@ -30,6 +30,7 @@ Add these checks — they map exactly to job names in the workflows:
 | `PR body has required sections` | `pr-validation.yml` |
 | `perf PRs must update BENCHMARK.md` | `pr-validation.yml` |
 | `Release & Changelog` | `release.yml` |
+| `Run Tests and Coverage` | `test.yml` |
 
 > Status check names must match exactly. Run each workflow at least once so
 > GitHub discovers them before you add them as required checks.
