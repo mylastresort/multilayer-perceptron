@@ -9,4 +9,8 @@ echo "Running code coverage analysis..."
 
 mkdir -p coverage
 
-cargo tarpaulin --out Html --output-dir coverage --verbose
+cargo tarpaulin \
+  --out Html \
+  --output-dir coverage \
+  --jobs $(nproc) \
+  --verbose

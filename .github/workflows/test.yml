@@ -13,6 +13,9 @@ jobs:
     permissions:
       contents: write
 
+    env:
+      CARGO_BUILD_JOBS: 2
+
     steps:
       - uses: actions/checkout@v4
 
@@ -32,18 +35,22 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --jobs $(nproc)
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --jobs $(nproc)
 
       - name: Generate coverage
         run: ./scripts/coverage.sh
 
+      # Only update the badge when merged to main — not on PRs
+      # (PRs run in detached HEAD and cannot push to a branch)
       - name: Update README with coverage badge
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: ./scripts/update_readme.sh
 
       - name: Commit coverage updates
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
@@ -52,5 +59,5 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore(coverage): update badge $(date +'%Y-%m-%d')"
-            git push
+            git push origin HEAD:main
           fi

@@ -15,7 +15,7 @@ set -e
 echo "Generating coverage data for README update..."
 
 # Run tarpaulin and capture stdout output
-COVERAGE_OUTPUT=$(cargo tarpaulin --out Stdout 2>/dev/null || echo "")
+COVERAGE_OUTPUT=$(cargo tarpaulin --out Stdout --jobs $(nproc) 2>/dev/null || echo "")
 
 if [ -z "$COVERAGE_OUTPUT" ]; then
   echo "Failed to generate coverage data"
