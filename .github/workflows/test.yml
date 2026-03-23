@@ -1,0 +1,63 @@
+name: Tests and Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests and Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      CARGO_BUILD_JOBS: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --jobs $(nproc)
+
+      - name: Run tests
+        run: cargo test --jobs $(nproc)
+
+      - name: Generate coverage
+        run: ./scripts/coverage.sh
+
+      # Only update the badge when merged to main — not on PRs
+      # (PRs run in detached HEAD and cannot push to a branch)
+      - name: Update README with coverage badge
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: ./scripts/update_readme.sh
+
+      - name: Commit coverage updates
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore(coverage): update badge $(date +'%Y-%m-%d')"
+            git push origin HEAD:main
+          fi

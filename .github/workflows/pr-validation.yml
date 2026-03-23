@@ -1,0 +1,105 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  validate-pr-title:
+    name: PR title follows conventional commits
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            chore
+            docs
+            ci
+            test
+          requireScope: false
+          subjectPattern: ^.{10,}$
+          subjectPatternError: |
+            PR title must be at least 10 characters.
+            Good example: "perf(parser): reduce p99 latency 320ms → 48ms"
+
+  validate-pr-body:
+    name: PR body has required sections
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const title = context.payload.pull_request.title || '';
+            const errors = [];
+
+            // Rule: PR body must be meaningful
+            if (body.trim().length < 30) {
+              errors.push('PR body is too short. Describe what changed and why.');
+            }
+
+            // Rule: perf PRs must have proven results with a number
+            if (title.startsWith('perf')) {
+              const section = body.match(/## ✅ Proven Results([\s\S]*?)(?=##|$)/);
+              const content = section
+                ? section[1].replace(/<!--[\s\S]*?-->/g, '').trim()
+                : '';
+              if (!content || !/\d/.test(content)) {
+                errors.push(
+                  'perf PRs must fill the "✅ Proven Results" section with at least one number.\n' +
+                  'Example: "p99 latency dropped from 320ms to 48ms at 200 req/s"'
+                );
+              }
+            }
+
+            if (errors.length > 0) {
+              core.setFailed('❌ PR validation failed:\n\n' + errors.map(e => `• ${e}`).join('\n\n'));
+            } else {
+              console.log('✅ PR validation passed.');
+            }
+
+  validate-benchmark-updated:
+    name: perf PRs must update BENCHMARK.md
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title || '';
+            if (!title.startsWith('perf')) {
+              console.log('Not a perf PR — skipping.');
+              return;
+            }
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const updated = files.some(f => f.filename === 'BENCHMARK.md');
+            if (!updated) {
+              core.setFailed(
+                '❌ perf PRs must update BENCHMARK.md with new measurements before merging.'
+              );
+            } else {
+              console.log('✅ BENCHMARK.md updated.');
+            }
