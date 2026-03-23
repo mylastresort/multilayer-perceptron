@@ -1,0 +1,114 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-perf-commit:
+    name: Check for perf commits
+    runs-on: ubuntu-latest
+    outputs:
+      has_perf: ${{ steps.check.outputs.has_perf }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect perf commits
+        id: check
+        run: |
+          if git log --format="%s" origin/main..HEAD | grep -qE "^perf(\(.+\))?:"; then
+            echo "has_perf=true" >> $GITHUB_OUTPUT
+          elif git log -1 --format="%s" | grep -qE "^perf(\(.+\))?:"; then
+            echo "has_perf=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_perf=false" >> $GITHUB_OUTPUT
+            echo "No perf commits found — skipping benchmarks"
+          fi
+
+  bench-throughput:
+    name: Throughput
+    needs: check-perf-commit
+    if: needs.check-perf-commit.outputs.has_perf == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run throughput benchmark
+        run: |
+          # Replace with your benchmark command, e.g.:
+          # go test -bench=BenchmarkThroughput -benchmem ./... | tee throughput.txt
+          # npx jest --testPathPattern=bench/throughput --json > throughput.txt
+          # pytest bench/throughput.py --benchmark-json throughput.txt
+          echo "placeholder — add your benchmark command here"
+
+      # Uncomment once you have a real benchmark command and output file
+      # - uses: benchmark-action/github-action-benchmark@v1
+      #   with:
+      #     name: Throughput
+      #     tool: customBiggerIsBetter
+      #     output-file-path: throughput.txt
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     auto-push: ${{ github.ref == 'refs/heads/main' }}
+      #     alert-threshold: '120%'
+      #     comment-on-alert: true
+      #     fail-on-alert: false
+      #     benchmark-data-dir-path: dev/bench/throughput
+
+  bench-latency:
+    name: Latency
+    needs: check-perf-commit
+    if: needs.check-perf-commit.outputs.has_perf == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run latency benchmark
+        run: |
+          # Replace with your benchmark command, e.g.:
+          # k6 run --out json=latency.txt bench/latency.js
+          echo "placeholder — add your benchmark command here"
+
+      # Uncomment once you have a real benchmark command and output file
+      # - uses: benchmark-action/github-action-benchmark@v1
+      #   with:
+      #     name: Latency
+      #     tool: customSmallerIsBetter
+      #     output-file-path: latency.txt
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     auto-push: ${{ github.ref == 'refs/heads/main' }}
+      #     alert-threshold: '120%'
+      #     comment-on-alert: true
+      #     fail-on-alert: false
+      #     benchmark-data-dir-path: dev/bench/latency
+
+  bench-memory:
+    name: Memory
+    needs: check-perf-commit
+    if: needs.check-perf-commit.outputs.has_perf == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run memory benchmark
+        run: |
+          # Replace with your benchmark command, e.g.:
+          # node --expose-gc bench/memory.js | tee memory.txt
+          echo "placeholder — add your benchmark command here"
+
+      # Uncomment once you have a real benchmark command and output file
+      # - uses: benchmark-action/github-action-benchmark@v1
+      #   with:
+      #     name: Memory
+      #     tool: customSmallerIsBetter
+      #     output-file-path: memory.txt
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     auto-push: ${{ github.ref == 'refs/heads/main' }}
+      #     alert-threshold: '115%'
+      #     comment-on-alert: true
+      #     fail-on-alert: false
+      #     benchmark-data-dir-path: dev/bench/memory
