@@ -42,6 +42,7 @@ Add these checks — they map exactly to job names in the workflows:
 | Secret | Used by | Required |
 |--------|---------|----------|
 | `GITHUB_TOKEN` | All workflows | Auto-provided by GitHub — never set manually |
+| `CODECOV_TOKEN` | `test.yml` | codecov.io → your repo → Settings → General |
 
 ---
 

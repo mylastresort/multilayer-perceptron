@@ -5,8 +5,7 @@
 ![CI](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/commitlint.yml/badge.svg)
 ![Benchmarks](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/benchmark.yml/badge.svg)
 ![Release](https://github.com/<!-- org -->/<!-- repo -->/actions/workflows/release.yml/badge.svg)
-<img src="https://img.shields.io/badge/coverage-0.0%25-orange" alt="Coverage">
-
+[![Codecov](https://codecov.io/gh/mylastresort/multilayer-perceptron/graph/badge.svg?token=jmjvtSTUeJ)](https://codecov.io/gh/mylastresort/multilayer-perceptron)
 ---
 
 ## Overview
