@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use ndarray::Axis;
 use rand::prelude::SliceRandom;
@@ -80,7 +80,7 @@ pub fn train_test_split(
         }
         Some(stratify_col) => {
             // Group row indices by the stratification key, then split each group.
-            let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+            let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
             let keys = stratify_keys(dataset, stratify_col);
             for (index, key) in keys.into_iter().enumerate() {
                 groups.entry(key).or_default().push(index);
