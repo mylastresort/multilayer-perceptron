@@ -11,16 +11,13 @@ jobs:
     name: Run Tests and Coverage
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     env:
       CARGO_BUILD_JOBS: 2
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
@@ -46,24 +43,18 @@ jobs:
       - name: Run tests
         run: cargo test --jobs $(nproc)
 
-      - name: Generate coverage
-        run: ./scripts/coverage.sh
+      - name: Generate coverage (lcov format for Codecov)
+        run: |
+          cargo tarpaulin \
+            --out Lcov \
+            --output-dir coverage \
+            --jobs $(nproc) \
+            --verbose
 
-      # # Only update the badge when merged to main — not on PRs
-      # # (PRs run in detached HEAD and cannot push to a branch)
-      # - name: Update README with coverage badge
-      #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      #   run: ./scripts/update_readme.sh
-
-      # - name: Commit coverage updates
-      #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      #   run: |
-      #     git config --local user.email "action@github.com"
-      #     git config --local user.name "GitHub Action"
-      #     git add README.md
-      #     if git diff --cached --quiet; then
-      #       echo "No changes to commit"
-      #     else
-      #       git commit -m "chore(coverage): update badge $(date +'%Y-%m-%d')"
-      #       git push origin HEAD:main
-      #     fi
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/lcov.info
+          fail_ci_if_error: true
+          verbose: true

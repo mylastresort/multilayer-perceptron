@@ -1,0 +1,14 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto          # must not drop below previous coverage
+        threshold: 1%         # allow up to 1% drop before failing
+    patch:
+      default:
+        target: 80%           # new code in PRs must be at least 80% covered
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true       # only comment if coverage changed
