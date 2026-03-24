@@ -15,9 +15,15 @@ pub trait Activation {
     // Derivative of the activation function for backpropagation.
     fn derivative(&self, x: &Array2<f64>) -> Array2<f64>;
     // Computes the forward pass of the activation function.
-    fn forward(&self, x: &Array2<f64>) -> Array2<f64>;
+    #[inline]
+    fn forward(&self, x: &Array2<f64>) -> Array2<f64> {
+        self.as_function(x)
+    }
     // Computes the backward pass (gradient) of the activation function.
-    fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64>;
+    #[inline]
+    fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
+        grad * self.derivative(x)
+    }
 }
 
 impl Activation for ActivationFunction {
@@ -53,16 +59,6 @@ impl Activation for ActivationFunction {
                 &softmax_x * &(1.0 - &softmax_x)
             }
         }
-    }
-
-    #[inline]
-    fn forward(&self, x: &Array2<f64>) -> Array2<f64> {
-        self.as_function(x)
-    }
-
-    #[inline]
-    fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
-        grad * self.derivative(x)
     }
 }
 
