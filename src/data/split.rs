@@ -1,0 +1,265 @@
+use std::collections::BTreeMap;
+
+use ndarray::Axis;
+use rand::prelude::SliceRandom;
+use rand::{Rng, SeedableRng, rngs::StdRng};
+
+use crate::data::loader::Dataset;
+
+fn split_and_collect_indices<R: Rng + ?Sized>(
+    indices: &mut [usize],
+    train_ratio: f64,
+    rng: &mut R,
+) -> (Vec<usize>, Vec<usize>) {
+    indices.shuffle(rng);
+    let train_size = (indices.len() as f64 * train_ratio).round() as usize;
+    let (train, test) = indices.split_at(train_size);
+    (train.to_vec(), test.to_vec())
+}
+
+fn dataset_len(dataset: &Dataset) -> usize {
+    dataset.features.nrows()
+}
+
+fn select_dataset_rows(dataset: &Dataset, indices: &[usize]) -> Dataset {
+    Dataset {
+        features: dataset.features.select(Axis(0), indices),
+        labels: dataset.labels.select(Axis(0), indices),
+        feature_names: dataset.feature_names.clone(),
+    }
+}
+
+fn stratify_keys(dataset: &Dataset, stratify_col: &str) -> Vec<String> {
+    if matches!(stratify_col, "label" | "labels") {
+        return dataset
+            .labels
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+    }
+
+    let col_index = dataset
+        .feature_names
+        .iter()
+        .position(|name| name == stratify_col)
+        .expect("Stratification column not found in dataset feature names");
+
+    let adjusted_index = if col_index < dataset.features.ncols() {
+        col_index
+    } else {
+        col_index
+            .checked_sub(1)
+            .filter(|index| *index < dataset.features.ncols())
+            .expect("Stratification column index is out of bounds")
+    };
+
+    (0..dataset_len(dataset))
+        .map(|row| dataset.features[[row, adjusted_index]].to_string())
+        .collect()
+}
+
+// Implements stratified train-test split for datasets.
+pub fn train_test_split(
+    dataset: &Dataset,
+    train_ratio: f64,
+    seed: Option<u64>,
+    stratify: Option<&str>,
+) -> (Dataset, Dataset) {
+    let mut rng = match seed {
+        Some(seed_value) => StdRng::seed_from_u64(seed_value),
+        None => {
+            let mut thread_rng = rand::thread_rng();
+            StdRng::from_rng(&mut thread_rng).expect("Failed to initialize random generator")
+        }
+    };
+
+    let (train_indices, test_indices) = match stratify {
+        None => {
+            let mut indices: Vec<usize> = (0..dataset_len(dataset)).collect();
+            split_and_collect_indices(&mut indices, train_ratio, &mut rng)
+        }
+        Some(stratify_col) => {
+            // Group row indices by the stratification key, then split each group.
+            let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            let keys = stratify_keys(dataset, stratify_col);
+            for (index, key) in keys.into_iter().enumerate() {
+                groups.entry(key).or_default().push(index);
+            }
+
+            let mut train_indices = Vec::new();
+            let mut test_indices = Vec::new();
+            for group in groups.values() {
+                let mut group_indices = group.clone();
+                let (group_train, group_test) =
+                    split_and_collect_indices(&mut group_indices, train_ratio, &mut rng);
+                train_indices.extend(group_train);
+                test_indices.extend(group_test);
+            }
+            (train_indices, test_indices)
+        }
+    };
+
+    (
+        select_dataset_rows(dataset, &train_indices),
+        select_dataset_rows(dataset, &test_indices),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::train_test_split;
+    use crate::data::loader::Dataset;
+    use ndarray::{Array1, array};
+
+    fn build_dataset(
+        features: ndarray::Array2<f64>,
+        labels: Vec<f64>,
+        names: Vec<&str>,
+    ) -> Dataset {
+        Dataset {
+            features,
+            labels: Array1::from_vec(labels),
+            feature_names: names.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn random_split_preserves_total_rows() {
+        let dataset = build_dataset(
+            array![
+                [0.0, 10.0],
+                [1.0, 11.0],
+                [0.0, 12.0],
+                [1.0, 13.0],
+                [0.0, 14.0],
+                [1.0, 15.0],
+                [0.0, 16.0],
+                [1.0, 17.0],
+                [0.0, 18.0],
+                [1.0, 19.0]
+            ],
+            vec![0.0; 10],
+            vec!["class", "value"],
+        );
+
+        let (train, test) = train_test_split(&dataset, 0.7, Some(7), None);
+
+        assert_eq!(train.features.nrows(), 7);
+        assert_eq!(test.features.nrows(), 3);
+        assert_eq!(
+            train.features.nrows() + test.features.nrows(),
+            dataset.features.nrows()
+        );
+    }
+
+    #[test]
+    fn stratified_split_preserves_group_counts() {
+        let dataset = build_dataset(
+            array![
+                [0.0, 10.0],
+                [0.0, 11.0],
+                [0.0, 12.0],
+                [0.0, 13.0],
+                [0.0, 14.0],
+                [1.0, 20.0],
+                [1.0, 21.0],
+                [1.0, 22.0],
+                [1.0, 23.0],
+                [1.0, 24.0]
+            ],
+            vec![0.0; 10],
+            vec!["class", "value"],
+        );
+
+        let (train, test) = train_test_split(&dataset, 0.6, Some(13), Some("class"));
+
+        let train_class_zero = train
+            .features
+            .column(0)
+            .iter()
+            .filter(|value| (**value - 0.0).abs() < f64::EPSILON)
+            .count();
+        let train_class_one = train
+            .features
+            .column(0)
+            .iter()
+            .filter(|value| (**value - 1.0).abs() < f64::EPSILON)
+            .count();
+        let test_class_zero = test
+            .features
+            .column(0)
+            .iter()
+            .filter(|value| (**value - 0.0).abs() < f64::EPSILON)
+            .count();
+        let test_class_one = test
+            .features
+            .column(0)
+            .iter()
+            .filter(|value| (**value - 1.0).abs() < f64::EPSILON)
+            .count();
+
+        assert_eq!(train_class_zero, 3);
+        assert_eq!(train_class_one, 3);
+        assert_eq!(test_class_zero, 2);
+        assert_eq!(test_class_one, 2);
+    }
+
+    #[test]
+    fn stratified_split_handles_single_group_dataset() {
+        let dataset = build_dataset(
+            array![
+                [1.0, 10.0],
+                [1.0, 11.0],
+                [1.0, 12.0],
+                [1.0, 13.0],
+                [1.0, 14.0]
+            ],
+            vec![1.0; 5],
+            vec!["class", "value"],
+        );
+
+        let (train, test) = train_test_split(&dataset, 0.8, Some(99), Some("class"));
+
+        assert_eq!(train.features.nrows(), 4);
+        assert_eq!(test.features.nrows(), 1);
+        assert!(
+            train
+                .features
+                .column(0)
+                .iter()
+                .all(|value| (*value - 1.0).abs() < f64::EPSILON)
+        );
+        assert!(
+            test.features
+                .column(0)
+                .iter()
+                .all(|value| (*value - 1.0).abs() < f64::EPSILON)
+        );
+    }
+
+    #[test]
+    fn same_seed_produces_same_split() {
+        let dataset = build_dataset(
+            array![
+                [0.0, 10.0],
+                [0.0, 11.0],
+                [0.0, 12.0],
+                [0.0, 13.0],
+                [1.0, 20.0],
+                [1.0, 21.0],
+                [1.0, 22.0],
+                [1.0, 23.0]
+            ],
+            vec![0.0; 8],
+            vec!["class", "value"],
+        );
+
+        let (train_a, test_a) = train_test_split(&dataset, 0.75, Some(1234), Some("class"));
+        let (train_b, test_b) = train_test_split(&dataset, 0.75, Some(1234), Some("class"));
+
+        assert_eq!(train_a.features, train_b.features);
+        assert_eq!(train_a.labels, train_b.labels);
+        assert_eq!(test_a.features, test_b.features);
+        assert_eq!(test_a.labels, test_b.labels);
+    }
+}
