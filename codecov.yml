@@ -8,6 +8,9 @@ coverage:
       default:
         target: 80%           # new code in PRs must be at least 80% covered
 
+ignore:
+  - "src/main.rs"             # binary entry point; never executed by unit tests
+
 comment:
   layout: "reach,diff,flags,files"
   behavior: default

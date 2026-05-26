@@ -2,7 +2,7 @@ mod app;
 
 use std::error::Error;
 
-use app::cli::{apply_net_overrides, parse_cli_args};
+use app::cli::{apply_net_overrides, parse_args, usage};
 use app::display::{print_loaded_config, print_loaded_dataset, print_verbose_config};
 use app::predict::{PredictArgs, run_predict};
 use app::split::{SplitArgs, run_split};
@@ -11,7 +11,22 @@ use app::types::Subcommand;
 use mlp::network::config::NetworkConfig;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let cli_args = parse_cli_args()?;
+    let mut env_args = std::env::args();
+    let binary_name = env_args.next().unwrap_or_else(|| "mlp".to_string());
+    let rest: Vec<String> = env_args.collect();
+
+    let is_help = rest.is_empty()
+        || rest[0] == "--help"
+        || rest[0] == "-h"
+        || rest.iter().any(|a| a == "--help" || a == "-h");
+
+    let cli_args = match parse_args(&binary_name, &rest) {
+        Err(e) if is_help => {
+            println!("{e}");
+            std::process::exit(0);
+        }
+        other => other?,
+    };
 
     match cli_args.subcommand {
         // ---------------------------------------------------------------
