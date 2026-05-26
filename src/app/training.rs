@@ -4,6 +4,7 @@ use mlp::console::{Tone, bold, paint};
 use mlp::data::loader::{Dataset, load_dataset};
 use mlp::network::callbacks::{Callback, ProgressLogger};
 use mlp::network::config::NetworkConfig;
+use mlp::network::model::Network;
 use mlp::training::monitor::{EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback};
 use mlp::training::{loss::LossFunction, optimizer::OptimizerType};
 use mlp::visualization::live_monitor::{GuiMonitorConfig, LiveTrainingMonitorCallback};
@@ -57,7 +58,7 @@ pub fn train_from_dataset(
     network_config: &NetworkConfig,
     gui: bool,
     monitor_options: &MonitorOptions,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Network, Box<dyn Error>> {
     // Baseline feature prep mirrors training_learning_curve_test.
     let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
     let y = dataset
@@ -113,7 +114,7 @@ pub fn train_from_dataset(
         Some((x_val.view(), y_val.view())),
         batch_size,
         epochs,
-        OptimizerType::SGD,
+        OptimizerType::from(network_config.optimizer),
         LossFunction::CategoricalCrossEntropy,
         &mut callbacks,
     );
@@ -174,5 +175,5 @@ pub fn train_from_dataset(
     }
 
     monitor.keep_open_until_closed();
-    Ok(())
+    Ok(network)
 }
