@@ -75,3 +75,33 @@ pub fn plot_loss_curve(
     root.present()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TrainingHistory, plot_loss_curve};
+
+    #[test]
+    fn plot_loss_curve_returns_error_when_train_loss_is_empty() {
+        let history = TrainingHistory {
+            train_loss: vec![],
+            val_loss: vec![],
+            train_accuracy: vec![],
+            val_accuracy: vec![],
+        };
+        let result = plot_loss_curve(&history, "/tmp/mlp_test_plot_empty.png");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn plot_loss_curve_returns_error_when_loss_is_non_finite() {
+        let history = TrainingHistory {
+            train_loss: vec![f64::INFINITY],
+            val_loss: vec![],
+            train_accuracy: vec![],
+            val_accuracy: vec![],
+        };
+        let result = plot_loss_curve(&history, "/tmp/mlp_test_plot_inf.png");
+        assert!(result.is_err());
+    }
+}

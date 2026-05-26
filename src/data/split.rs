@@ -262,4 +262,67 @@ mod tests {
         assert_eq!(test_a.features, test_b.features);
         assert_eq!(test_a.labels, test_b.labels);
     }
+
+    #[test]
+    fn stratified_by_label_column_uses_labels_array() {
+        let dataset = build_dataset(
+            array![
+                [10.0],
+                [11.0],
+                [12.0],
+                [13.0],
+                [20.0],
+                [21.0],
+                [22.0],
+                [23.0]
+            ],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec!["value"],
+        );
+
+        let (train, test) = train_test_split(&dataset, 0.75, Some(42), Some("label"));
+        assert_eq!(train.features.nrows() + test.features.nrows(), 8);
+
+        // Both classes should appear in the training set
+        let train_labels: std::collections::HashSet<i64> =
+            train.labels.iter().map(|v| *v as i64).collect();
+        assert!(train_labels.contains(&0));
+        assert!(train_labels.contains(&1));
+    }
+
+    #[test]
+    fn stratified_by_labels_alias_works() {
+        let dataset = build_dataset(
+            array![[1.0], [2.0], [3.0], [4.0]],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec!["feat"],
+        );
+        let (train, test) = train_test_split(&dataset, 0.5, Some(7), Some("labels"));
+        assert_eq!(train.features.nrows() + test.features.nrows(), 4);
+    }
+
+    #[test]
+    fn random_split_no_seed_completes_without_panic() {
+        let dataset = build_dataset(
+            array![[0.0, 1.0], [1.0, 0.0], [2.0, 3.0], [3.0, 2.0]],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec!["a", "b"],
+        );
+        let (train, test) = train_test_split(&dataset, 0.75, None, None);
+        assert_eq!(train.features.nrows() + test.features.nrows(), 4);
+    }
+
+    #[test]
+    fn stratified_split_uses_adjusted_column_index_when_names_exceed_ncols() {
+        // feature_names has 3 entries but features has only 2 columns.
+        // "extra" is at position 2 in feature_names; col_index(2) >= ncols(2)
+        // triggers the else-branch: adjusted_index = col_index.checked_sub(1) = 1.
+        let dataset = build_dataset(
+            array![[0.0, 10.0], [0.0, 11.0], [1.0, 20.0], [1.0, 21.0]],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec!["class", "value", "extra"],
+        );
+        let (train, test) = train_test_split(&dataset, 0.5, Some(1), Some("extra"));
+        assert_eq!(train.features.nrows() + test.features.nrows(), 4);
+    }
 }

@@ -66,3 +66,101 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{run_predict, PredictArgs};
+    use mlp::network::{
+        activation::ActivationFunction,
+        initializer::WeightInitializer,
+        layer::Layer,
+        model::Network,
+    };
+
+    #[test]
+    fn run_predict_returns_error_for_missing_model() {
+        let dataset_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
+        let result = run_predict(&PredictArgs {
+            dataset_path,
+            model_path: "/tmp/mlp_nonexistent_model_xyz123.json".to_string(),
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_predict_returns_error_for_empty_dataset() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let csv_path = format!("/tmp/mlp_empty_{}_{}.csv", std::process::id(), ts);
+        // Only a header row — 0 data rows → triggers "prediction dataset has no rows".
+        std::fs::write(&csv_path, "id,diagnosis,f1\n").unwrap();
+
+        // Build a minimal 1-output network compatible with 1 feature column.
+        let model_path = format!("/tmp/mlp_pred_empty_{}_{}.json", std::process::id(), ts);
+        let network = Network::new()
+            .learning_rate(0.01)
+            .add_layer(Layer::new(1, 2, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(2, 2, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(2, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .build();
+        network.save(&model_path).expect("model should save");
+
+        let result = run_predict(&PredictArgs { dataset_path: csv_path.clone(), model_path: model_path.clone() });
+        let _ = std::fs::remove_file(&csv_path);
+        let _ = std::fs::remove_file(&model_path);
+        // Should error because dataset has 0 rows.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_predict_succeeds_with_single_output_network() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let model_path = format!("/tmp/mlp_predict_single_{}_{}.json", std::process::id(), ts);
+        let dataset_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
+
+        // Single-output Sigmoid network: predictions.ncols() == 1 → exercises line 46.
+        let network = Network::new()
+            .learning_rate(0.01)
+            .add_layer(Layer::new(30, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .build();
+        network.save(&model_path).expect("model should save");
+
+        let result = run_predict(&PredictArgs { dataset_path, model_path: model_path.clone() });
+        let _ = std::fs::remove_file(&model_path);
+        assert!(result.is_ok(), "run_predict failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn run_predict_succeeds_with_two_output_network() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let model_path = format!("/tmp/mlp_predict_two_{}_{}.json", std::process::id(), ts);
+        let dataset_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
+
+        // Two-output Softmax network: predictions.ncols() == 2 → exercises the else-branch
+        // (lines 48-55) where accuracy is computed via argmax.
+        let network = Network::new()
+            .learning_rate(0.01)
+            .add_layer(Layer::new(30, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(4, 2, ActivationFunction::Softmax, WeightInitializer::He))
+            .build();
+        network.save(&model_path).expect("model should save");
+
+        let result = run_predict(&PredictArgs { dataset_path, model_path: model_path.clone() });
+        let _ = std::fs::remove_file(&model_path);
+        assert!(result.is_ok(), "run_predict failed: {:?}", result.err());
+    }
+}

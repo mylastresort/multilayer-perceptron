@@ -147,3 +147,148 @@ impl Loss for LossFunction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Loss, LossFunction};
+    use ndarray::{arr1, arr2};
+
+    // -----------------------------------------------------------------------
+    // MSE
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mse_compute_zero_when_predictions_equal_targets() {
+        let preds = arr2(&[[1.0], [2.0], [3.0]]);
+        let targets = arr1(&[1.0, 2.0, 3.0]);
+        let loss = LossFunction::MSE.compute(preds.view(), targets.view());
+        assert!(loss.abs() < 1e-12);
+    }
+
+    #[test]
+    fn mse_compute_correct_value() {
+        // predictions = [[2.0]], targets = [0.0]  → MSE = (2-0)^2 / 1 = 4.0
+        let preds = arr2(&[[2.0]]);
+        let targets = arr1(&[0.0]);
+        let loss = LossFunction::MSE.compute(preds.view(), targets.view());
+        assert!((loss - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mse_gradient_zero_when_predictions_equal_targets() {
+        let preds = arr2(&[[1.0], [2.0]]);
+        let targets = arr1(&[1.0, 2.0]);
+        let grad = LossFunction::MSE.gradient(preds.view(), targets.view());
+        for v in grad.iter() {
+            assert!(v.abs() < 1e-12, "expected zero gradient, got {v}");
+        }
+    }
+
+    #[test]
+    fn mse_gradient_correct_sign() {
+        // pred > target → gradient should be positive
+        let preds = arr2(&[[3.0]]);
+        let targets = arr1(&[1.0]);
+        let grad = LossFunction::MSE.gradient(preds.view(), targets.view());
+        assert!(grad[[0, 0]] > 0.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn mse_compute_panics_on_row_mismatch() {
+        let preds = arr2(&[[1.0], [2.0]]);
+        let targets = arr1(&[1.0]);
+        LossFunction::MSE.compute(preds.view(), targets.view());
+    }
+
+    // -----------------------------------------------------------------------
+    // BinaryCrossEntropy – single column
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bce_single_col_compute_near_zero_for_perfect_predictions() {
+        // p ≈ 1 for y=1 → loss ≈ 0
+        let preds = arr2(&[[0.999_999]]);
+        let targets = arr1(&[1.0]);
+        let loss = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
+        assert!(loss < 1e-4, "expected near-zero loss, got {loss}");
+    }
+
+    #[test]
+    fn bce_single_col_gradient_direction_for_overestimate() {
+        // p > y → gradient should be positive
+        let preds = arr2(&[[0.9]]);
+        let targets = arr1(&[0.0]);
+        let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
+        assert!(grad[[0, 0]] > 0.0);
+    }
+
+    #[test]
+    fn bce_single_col_gradient_direction_for_underestimate() {
+        // p < y → gradient should be negative
+        let preds = arr2(&[[0.1]]);
+        let targets = arr1(&[1.0]);
+        let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
+        assert!(grad[[0, 0]] < 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // BinaryCrossEntropy – multi column (one-hot style)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bce_multi_col_compute_finite_for_valid_predictions() {
+        let preds = arr2(&[[0.8, 0.2], [0.3, 0.7]]);
+        let targets = arr1(&[0.0, 1.0]);
+        let loss = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
+        assert!(loss.is_finite());
+        assert!(loss > 0.0);
+    }
+
+    #[test]
+    fn bce_multi_col_gradient_shape_matches_predictions() {
+        let preds = arr2(&[[0.6, 0.4], [0.3, 0.7]]);
+        let targets = arr1(&[0.0, 1.0]);
+        let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
+        assert_eq!(grad.dim(), preds.dim());
+    }
+
+    // -----------------------------------------------------------------------
+    // CategoricalCrossEntropy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cce_compute_finite_for_valid_predictions() {
+        let preds = arr2(&[[0.1, 0.7, 0.2], [0.8, 0.1, 0.1]]);
+        let targets = arr1(&[1.0, 0.0]);
+        let loss = LossFunction::CategoricalCrossEntropy.compute(preds.view(), targets.view());
+        assert!(loss.is_finite());
+        assert!(loss > 0.0);
+    }
+
+    #[test]
+    fn cce_gradient_shape_matches_predictions() {
+        let preds = arr2(&[[0.1, 0.7, 0.2], [0.8, 0.1, 0.1]]);
+        let targets = arr1(&[1.0, 0.0]);
+        let grad = LossFunction::CategoricalCrossEntropy.gradient(preds.view(), targets.view());
+        assert_eq!(grad.dim(), preds.dim());
+    }
+
+    #[test]
+    fn cce_gradient_subtracts_one_from_true_class() {
+        // Single sample; class 1 is true → grad[0][1] should be reduced
+        let preds = arr2(&[[0.2, 0.5, 0.3]]);
+        let targets = arr1(&[1.0]);
+        let grad = LossFunction::CategoricalCrossEntropy.gradient(preds.view(), targets.view());
+        // grad[0][1] = (0.5 - 1.0) * scale = -0.5
+        assert!(grad[[0, 1]] < 0.0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn cce_gradient_panics_on_row_mismatch() {
+        let preds = arr2(&[[0.5, 0.5]]);
+        let targets = arr1(&[0.0, 1.0]);
+        LossFunction::CategoricalCrossEntropy.gradient(preds.view(), targets.view());
+    }
+}

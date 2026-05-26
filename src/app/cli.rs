@@ -65,17 +65,12 @@ pub fn usage(binary_name: &str) -> String {
     )
 }
 
-pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
-    let mut args = std::env::args();
-    let binary_name = args.next().unwrap_or_else(|| "mlp".to_string());
-
-    // Collect remaining args so we can peek at the subcommand first.
-    let rest: Vec<String> = args.collect();
-
-    // Handle top-level --help with no subcommand.
+/// Core argument parsing logic. Accepts the binary name and the remaining
+/// arguments (everything after `argv[0]`). Returns `Err` when `--help` / `-h`
+/// is requested so that the caller can decide whether to exit.
+pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn Error>> {
     if rest.is_empty() || rest[0] == "--help" || rest[0] == "-h" {
-        println!("{}", usage(&binary_name));
-        std::process::exit(0);
+        return Err(usage(binary_name).into());
     }
 
     let subcommand = match rest[0].as_str() {
@@ -84,7 +79,7 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
         "predict" => Subcommand::Predict,
         other => {
             return Err(
-                format!("Unknown subcommand: '{other}'\n{}", usage(&binary_name)).into(),
+                format!("Unknown subcommand: '{other}'\n{}", usage(binary_name)).into(),
             );
         }
     };
@@ -102,7 +97,7 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
     let mut val_out: Option<String> = None;
 
     let mut pending_flag: Option<String> = None;
-    for arg in rest.into_iter().skip(1) {
+    for arg in rest.iter().skip(1).cloned() {
         if let Some(flag) = pending_flag.take() {
             match flag.as_str() {
                 "--dataset" | "-d" => dataset_path = arg,
@@ -197,17 +192,16 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
             "--gui" | "-g" => gui = true,
             "--monitor-early-stopping" => monitor_options.early_stopping = true,
             "--help" | "-h" => {
-                println!("{}", usage(&binary_name));
-                std::process::exit(0);
+                return Err(usage(binary_name).into());
             }
             _ => {
-                return Err(format!("Unknown argument: {arg}\n{}", usage(&binary_name)).into());
+                return Err(format!("Unknown argument: {arg}\n{}", usage(binary_name)).into());
             }
         }
     }
 
     if let Some(flag) = pending_flag {
-        return Err(format!("Missing value for {flag}\n{}", usage(&binary_name)).into());
+        return Err(format!("Missing value for {flag}\n{}", usage(binary_name)).into());
     }
 
     Ok(CliArgs {
@@ -224,6 +218,29 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
         train_out,
         val_out,
     })
+}
+
+/// Thin wrapper around [`parse_args`] that reads from `std::env::args()` and
+/// prints usage + exits with code 0 when `--help` / `-h` is requested.
+/// Excluded from coverage instrumentation because it calls `process::exit`.
+#[cfg(not(tarpaulin_include))]
+pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
+    let mut env_args = std::env::args();
+    let binary_name = env_args.next().unwrap_or_else(|| "mlp".to_string());
+    let rest: Vec<String> = env_args.collect();
+
+    let is_help = rest.is_empty()
+        || rest[0] == "--help"
+        || rest[0] == "-h"
+        || rest.iter().any(|a| a == "--help" || a == "-h");
+
+    match parse_args(&binary_name, &rest) {
+        Err(e) if is_help => {
+            println!("{e}");
+            std::process::exit(0);
+        }
+        other => other,
+    }
 }
 
 pub fn apply_net_overrides(
@@ -252,4 +269,492 @@ pub fn apply_net_overrides(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_net_overrides, default_config_path, default_dataset_path, parse_args, usage,
+        NetOverrides,
+    };
+    use mlp::network::config::NetworkConfig;
+
+    fn ss(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn make_config() -> NetworkConfig {
+        let yaml = r#"
+learning_rate: 0.01
+epochs: 10
+batch_size: 8
+input_layers:
+  - size: 4
+hidden_layers:
+  - size: 4
+  - size: 4
+output_layers:
+  - size: 2
+"#;
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn default_dataset_path_ends_with_data_csv() {
+        let path = default_dataset_path();
+        assert!(path.ends_with("data.csv"), "unexpected path: {path}");
+    }
+
+    #[test]
+    fn default_config_path_ends_with_yaml() {
+        let path = default_config_path();
+        assert!(path.ends_with(".yaml"), "unexpected path: {path}");
+    }
+
+    #[test]
+    fn usage_string_contains_all_subcommands() {
+        let msg = usage("mlp");
+        assert!(msg.contains("train"), "missing 'train'");
+        assert!(msg.contains("split"), "missing 'split'");
+        assert!(msg.contains("predict"), "missing 'predict'");
+        assert!(msg.contains("Usage:"), "missing 'Usage:'");
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – subcommand routing
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_train_subcommand() {
+        let args = ss(&["train"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(matches!(cli.subcommand, super::Subcommand::Train));
+    }
+
+    #[test]
+    fn parse_args_split_subcommand() {
+        let args = ss(&["split"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(matches!(cli.subcommand, super::Subcommand::Split));
+    }
+
+    #[test]
+    fn parse_args_predict_subcommand() {
+        let args = ss(&["predict"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(matches!(cli.subcommand, super::Subcommand::Predict));
+    }
+
+    #[test]
+    fn parse_args_empty_returns_err() {
+        assert!(parse_args("mlp", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_args_help_long_flag_returns_err() {
+        assert!(parse_args("mlp", &ss(&["--help"])).is_err());
+    }
+
+    #[test]
+    fn parse_args_help_short_flag_returns_err() {
+        assert!(parse_args("mlp", &ss(&["-h"])).is_err());
+    }
+
+    #[test]
+    fn parse_args_unknown_subcommand_returns_err() {
+        assert!(parse_args("mlp", &ss(&["unknown"])).is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – common flags
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_dataset_long_flag() {
+        let args = ss(&["train", "--dataset", "/tmp/data.csv"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.dataset_path, "/tmp/data.csv");
+    }
+
+    #[test]
+    fn parse_args_dataset_short_flag() {
+        let args = ss(&["train", "-d", "/tmp/data.csv"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.dataset_path, "/tmp/data.csv");
+    }
+
+    #[test]
+    fn parse_args_config_long_flag() {
+        let args = ss(&["train", "--config", "/tmp/cfg.yaml"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.config_path, "/tmp/cfg.yaml");
+    }
+
+    #[test]
+    fn parse_args_config_short_flag() {
+        let args = ss(&["train", "-c", "/tmp/cfg.yaml"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.config_path, "/tmp/cfg.yaml");
+    }
+
+    #[test]
+    fn parse_args_verbose_long_flag() {
+        let args = ss(&["train", "--verbose"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn parse_args_verbose_short_flag() {
+        let args = ss(&["train", "-v"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn parse_args_gui_long_flag() {
+        let args = ss(&["train", "--gui"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.gui);
+    }
+
+    #[test]
+    fn parse_args_gui_short_flag() {
+        let args = ss(&["train", "-g"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.gui);
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – split-specific flags
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_split_train_out_and_val_out() {
+        let args = ss(&["split", "--train-out", "/tmp/train.csv", "--val-out", "/tmp/val.csv"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.train_out.as_deref(), Some("/tmp/train.csv"));
+        assert_eq!(cli.val_out.as_deref(), Some("/tmp/val.csv"));
+    }
+
+    #[test]
+    fn parse_args_split_ratio() {
+        let args = ss(&["split", "--ratio", "0.75"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!((cli.split_ratio - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_args_split_ratio_invalid_returns_err() {
+        let args = ss(&["split", "--ratio", "not_a_float"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – train-specific flags
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_model_out() {
+        let args = ss(&["train", "--model-out", "/tmp/model.json"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.model_out.as_deref(), Some("/tmp/model.json"));
+    }
+
+    #[test]
+    fn parse_args_net_learning_rate_long() {
+        let args = ss(&["train", "--net-learning-rate", "0.001"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!((cli.net_overrides.learning_rate.unwrap() - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_args_net_learning_rate_short() {
+        let args = ss(&["train", "-l", "0.002"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!((cli.net_overrides.learning_rate.unwrap() - 0.002).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_args_net_learning_rate_invalid_returns_err() {
+        let args = ss(&["train", "--net-learning-rate", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_net_epochs_long() {
+        let args = ss(&["train", "--net-epochs", "50"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.net_overrides.epochs, Some(50));
+    }
+
+    #[test]
+    fn parse_args_net_epochs_short() {
+        let args = ss(&["train", "-e", "20"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.net_overrides.epochs, Some(20));
+    }
+
+    #[test]
+    fn parse_args_net_epochs_invalid_returns_err() {
+        let args = ss(&["train", "--net-epochs", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_net_batch_size_long() {
+        let args = ss(&["train", "--net-batch-size", "32"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.net_overrides.batch_size, Some(32));
+    }
+
+    #[test]
+    fn parse_args_net_batch_size_short() {
+        let args = ss(&["train", "-b", "16"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.net_overrides.batch_size, Some(16));
+    }
+
+    #[test]
+    fn parse_args_net_batch_size_invalid_returns_err() {
+        let args = ss(&["train", "--net-batch-size", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – monitor flags
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_monitor_early_stopping_flag() {
+        let args = ss(&["train", "--monitor-early-stopping"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.monitor_options.early_stopping);
+    }
+
+    #[test]
+    fn parse_args_monitor_patience_long() {
+        let args = ss(&["train", "--monitor-patience", "5"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.monitor_options.monitor_patience, 5);
+    }
+
+    #[test]
+    fn parse_args_monitor_patience_short() {
+        let args = ss(&["train", "-p", "3"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.monitor_options.monitor_patience, 3);
+    }
+
+    #[test]
+    fn parse_args_monitor_patience_invalid_returns_err() {
+        let args = ss(&["train", "--monitor-patience", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_monitor_min_delta() {
+        let args = ss(&["train", "--monitor-min-delta", "0.001"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!((cli.monitor_options.monitor_min_delta - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_args_monitor_min_delta_invalid_returns_err() {
+        let args = ss(&["train", "--monitor-min-delta", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_monitor_start_epoch_long() {
+        let args = ss(&["train", "--monitor-start-epoch", "10"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.monitor_options.monitor_start_epoch, 10);
+    }
+
+    #[test]
+    fn parse_args_monitor_start_epoch_short() {
+        let args = ss(&["train", "-s", "5"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.monitor_options.monitor_start_epoch, 5);
+    }
+
+    #[test]
+    fn parse_args_monitor_start_epoch_invalid_returns_err() {
+        let args = ss(&["train", "--monitor-start-epoch", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_monitor_history_out() {
+        let args = ss(&["train", "--monitor-history-out", "/tmp/history.json"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.monitor_options.history_out.as_deref(), Some("/tmp/history.json"));
+    }
+
+    #[test]
+    fn parse_args_monitor_mode_valid() {
+        let args = ss(&["train", "--monitor-mode", "min"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(matches!(cli.monitor_options.monitor_mode, mlp::training::monitor::MonitorMode::Min));
+    }
+
+    #[test]
+    fn parse_args_monitor_mode_invalid_returns_err() {
+        let args = ss(&["train", "--monitor-mode", "bad"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_monitor_primary_valid() {
+        let args = ss(&["train", "--monitor-primary", "loss"]);
+        assert!(parse_args("mlp", &args).is_ok());
+    }
+
+    #[test]
+    fn parse_args_monitor_primary_short() {
+        let args = ss(&["train", "-m", "loss"]);
+        assert!(parse_args("mlp", &args).is_ok());
+    }
+
+    #[test]
+    fn parse_args_monitor_primary_invalid_returns_err() {
+        let args = ss(&["train", "--monitor-primary", "unknown_metric_xyz"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_monitor_metrics_long() {
+        let args = ss(&["train", "--monitor-metrics", "loss,accuracy"]);
+        assert!(parse_args("mlp", &args).is_ok());
+    }
+
+    #[test]
+    fn parse_args_monitor_metrics_short() {
+        let args = ss(&["train", "-M", "loss"]);
+        assert!(parse_args("mlp", &args).is_ok());
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – predict-specific flags
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_predict_model_flag() {
+        let args = ss(&["predict", "--model", "/tmp/model.json"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert_eq!(cli.model_in.as_deref(), Some("/tmp/model.json"));
+    }
+
+    // -------------------------------------------------------------------
+    // parse_args – error cases
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_args_unknown_argument_returns_err() {
+        let args = ss(&["train", "--unknown-flag"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_help_inside_subcommand_returns_err() {
+        let args = ss(&["train", "--help"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_help_short_inside_subcommand_returns_err() {
+        let args = ss(&["train", "-h"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_missing_value_for_flag_returns_err() {
+        let args = ss(&["train", "--dataset"]);
+        assert!(parse_args("mlp", &args).is_err());
+    }
+
+    #[test]
+    fn parse_args_defaults_are_set() {
+        let cli = parse_args("mlp", &ss(&["train"])).unwrap();
+        assert!(cli.dataset_path.ends_with("data.csv"));
+        assert!(cli.config_path.ends_with(".yaml"));
+        assert!(!cli.verbose);
+        assert!(!cli.gui);
+        assert!((cli.split_ratio - 0.8).abs() < 1e-12);
+        assert!(cli.model_out.is_none());
+        assert!(cli.model_in.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // apply_net_overrides
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn apply_net_overrides_sets_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(0.001), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert!((config.learning_rate - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn apply_net_overrides_sets_epochs() {
+        let mut config = make_config();
+        let overrides = NetOverrides { epochs: Some(5), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.epochs, 5);
+    }
+
+    #[test]
+    fn apply_net_overrides_sets_batch_size() {
+        let mut config = make_config();
+        let overrides = NetOverrides { batch_size: Some(16), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.batch_size, 16);
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(0.0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_negative_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(-0.01), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_infinite_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(f64::INFINITY), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_epochs() {
+        let mut config = make_config();
+        let overrides = NetOverrides { epochs: Some(0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_batch_size() {
+        let mut config = make_config();
+        let overrides = NetOverrides { batch_size: Some(0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_is_noop_when_all_none() {
+        let mut config = make_config();
+        apply_net_overrides(&mut config, &NetOverrides::default()).unwrap();
+        assert!((config.learning_rate - 0.01).abs() < 1e-12);
+        assert_eq!(config.epochs, 10);
+        assert_eq!(config.batch_size, 8);
+    }
 }

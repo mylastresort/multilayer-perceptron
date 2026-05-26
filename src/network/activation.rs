@@ -172,4 +172,17 @@ mod tests {
 
         assert_matrix_close(&y, &y_shifted, 1e-12);
     }
+
+    #[test]
+    fn softmax_derivative_is_elementwise_s_times_one_minus_s() {
+        let activation = ActivationFunction::Softmax;
+        let x = arr2(&[[1.0, 2.0, 3.0]]);
+
+        let s = activation.forward(&x);
+        let dy = activation.derivative(&x);
+
+        // derivative = s * (1 - s) elementwise
+        let expected = &s * &(1.0 - &s);
+        assert_matrix_close(&dy, &expected, 1e-12);
+    }
 }

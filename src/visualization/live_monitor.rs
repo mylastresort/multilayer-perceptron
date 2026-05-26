@@ -358,3 +358,92 @@ fn maybe_open_live_window(
 
     LiveMonitorWindow::new("MLP Live Training Monitor", width, height, delay_ms)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{GuiMonitorConfig, LiveTrainingMonitorCallback};
+    use crate::{
+        network::callbacks::{Callback, CallbackLogs},
+        training::monitor::MonitoredMetric,
+    };
+
+    fn disabled_config(metrics: Vec<MonitoredMetric>) -> GuiMonitorConfig {
+        GuiMonitorConfig::from_env(false, metrics)
+    }
+
+    #[test]
+    fn gui_monitor_config_from_env_disabled_has_no_window() {
+        let config = disabled_config(vec![MonitoredMetric::Loss]);
+        assert!(!config.enabled);
+        assert_eq!(config.metrics.len(), 1);
+    }
+
+    #[test]
+    fn gui_monitor_config_uses_env_overrides() {
+        unsafe {
+            std::env::set_var("MLP_LIVE_PLOT_WIDTH", "800");
+            std::env::set_var("MLP_LIVE_PLOT_HEIGHT", "600");
+            std::env::set_var("MLP_LIVE_PLOT_DELAY_MS", "5");
+        }
+        let config = disabled_config(vec![]);
+        unsafe {
+            std::env::remove_var("MLP_LIVE_PLOT_WIDTH");
+            std::env::remove_var("MLP_LIVE_PLOT_HEIGHT");
+            std::env::remove_var("MLP_LIVE_PLOT_DELAY_MS");
+        }
+        assert_eq!(config.width, 800);
+        assert_eq!(config.height, 600);
+        assert_eq!(config.delay_ms, 5);
+    }
+
+    #[test]
+    fn live_monitor_callback_new_disabled_has_no_window() {
+        let config = disabled_config(vec![MonitoredMetric::Loss, MonitoredMetric::Accuracy]);
+        let monitor = LiveTrainingMonitorCallback::new(config);
+        // history_len is 0 before any epochs
+        assert_eq!(monitor.history_len(), 0);
+    }
+
+    #[test]
+    fn history_len_zero_when_no_metrics_configured() {
+        let config = disabled_config(vec![]);
+        let monitor = LiveTrainingMonitorCallback::new(config);
+        assert_eq!(monitor.history_len(), 0);
+    }
+
+    #[test]
+    fn on_epoch_end_records_values_when_logs_provided() {
+        let config = disabled_config(vec![MonitoredMetric::Loss, MonitoredMetric::Accuracy]);
+        let mut monitor = LiveTrainingMonitorCallback::new(config);
+
+        let logs = CallbackLogs {
+            loss: Some(0.5),
+            val_loss: Some(0.6),
+            accuracy: Some(0.8),
+            val_accuracy: Some(0.75),
+            ..CallbackLogs::default()
+        };
+
+        monitor.on_epoch_end(0, Some(&logs));
+        assert_eq!(monitor.history_len(), 1);
+
+        monitor.on_epoch_end(1, Some(&logs));
+        assert_eq!(monitor.history_len(), 2);
+    }
+
+    #[test]
+    fn on_epoch_end_is_noop_when_logs_is_none() {
+        let config = disabled_config(vec![MonitoredMetric::Loss]);
+        let mut monitor = LiveTrainingMonitorCallback::new(config);
+        monitor.on_epoch_end(0, None);
+        assert_eq!(monitor.history_len(), 0);
+    }
+
+    #[test]
+    fn keep_open_until_closed_is_noop_when_no_window() {
+        let config = disabled_config(vec![MonitoredMetric::Loss]);
+        let mut monitor = LiveTrainingMonitorCallback::new(config);
+        // Should complete immediately without blocking since live_window is None.
+        monitor.keep_open_until_closed();
+    }
+}
