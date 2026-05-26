@@ -192,4 +192,4 @@ Cargo.lock
 coverage/
 lcov.info
 
-data/profile_report.html
+data/profile_report.html*.pdf
