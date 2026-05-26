@@ -241,4 +241,61 @@ mod tests {
         assert_eq!(dataset.features.ncols(), 3);
         assert_eq!(dataset.features[[1, 1]], f64::default());
     }
+
+    #[test]
+    fn load_dataset_skips_extra_rows_when_skiprows_greater_than_one() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let csv_path = std::env::temp_dir().join(format!(
+            "mlp_skiprows_{}_{}.csv",
+            process::id(),
+            timestamp
+        ));
+
+        // First row = header, second row = extra row to skip, rows 3-4 = data.
+        let csv = "A,B\nskip_this_row,999\n1.0,2.0\n3.0,4.0\n";
+        fs::write(&csv_path, csv).expect("temporary csv should be writable");
+
+        let result = load_dataset(
+            csv_path
+                .to_str()
+                .expect("temporary csv path should be valid utf-8"),
+            2,
+            Vec::new(),
+            0,
+        );
+
+        let _ = fs::remove_file(&csv_path);
+
+        let dataset = result.expect("load with skiprows=2 should succeed");
+        // After skipping one extra row, only the 2 data rows should remain.
+        assert_eq!(dataset.features.nrows(), 2);
+    }
+
+    #[test]
+    fn load_dataset_handles_empty_string_in_string_column() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let csv_path = std::env::temp_dir().join(format!(
+            "mlp_null_string_{}_{}.csv",
+            process::id(),
+            timestamp
+        ));
+        // Row 2 has an empty Diagnosis field — hits the `_ => f64::default()` catch-all arm.
+        let csv = "ID,Diagnosis,Value\n1,M,10.0\n2,,11.0\n";
+        fs::write(&csv_path, csv).expect("temporary csv should be writable");
+        let result = load_dataset(
+            csv_path.to_str().expect("path should be valid utf-8"),
+            1,
+            Vec::new(),
+            0,
+        );
+        let _ = fs::remove_file(&csv_path);
+        let dataset = result.expect("loading csv with empty string should succeed");
+        assert_eq!(dataset.features.nrows(), 2);
+    }
 }

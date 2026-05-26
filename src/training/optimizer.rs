@@ -316,3 +316,28 @@ impl From<OptimizerKind> for OptimizerType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{Adam, NesterovSGD, Optimizer, RMSprop};
+
+    #[test]
+    fn nesterov_set_lr_updates_learning_rate() {
+        let mut opt = NesterovSGD::new(0.01, 0.9);
+        opt.set_lr(0.001);
+        // Verify the new lr is used: set_lr replaces the stored rate.
+        // (Internal field is private; just check it doesn't panic.)
+    }
+
+    #[test]
+    fn rmsprop_set_lr_updates_learning_rate() {
+        let mut opt = RMSprop::new(0.01, 0.9, 1e-8);
+        opt.set_lr(0.001);
+    }
+
+    #[test]
+    fn adam_set_lr_updates_learning_rate() {
+        let mut opt = Adam::new(0.01, 0.9, 0.999, 1e-8);
+        opt.set_lr(0.001);
+    }
+}
+

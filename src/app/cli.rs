@@ -253,3 +253,114 @@ pub fn apply_net_overrides(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_net_overrides, default_config_path, default_dataset_path, usage, NetOverrides};
+    use mlp::network::config::NetworkConfig;
+
+    fn make_config() -> NetworkConfig {
+        let yaml = r#"
+learning_rate: 0.01
+epochs: 10
+batch_size: 8
+input_layers:
+  - size: 4
+hidden_layers:
+  - size: 4
+  - size: 4
+output_layers:
+  - size: 2
+"#;
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn default_dataset_path_ends_with_data_csv() {
+        let path = default_dataset_path();
+        assert!(path.ends_with("data.csv"), "unexpected path: {path}");
+    }
+
+    #[test]
+    fn default_config_path_ends_with_yaml() {
+        let path = default_config_path();
+        assert!(path.ends_with(".yaml"), "unexpected path: {path}");
+    }
+
+    #[test]
+    fn usage_string_contains_all_subcommands() {
+        let msg = usage("mlp");
+        assert!(msg.contains("train"), "missing 'train'");
+        assert!(msg.contains("split"), "missing 'split'");
+        assert!(msg.contains("predict"), "missing 'predict'");
+        assert!(msg.contains("Usage:"), "missing 'Usage:'");
+    }
+
+    #[test]
+    fn apply_net_overrides_sets_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(0.001), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert!((config.learning_rate - 0.001).abs() < 1e-12);
+    }
+
+    #[test]
+    fn apply_net_overrides_sets_epochs() {
+        let mut config = make_config();
+        let overrides = NetOverrides { epochs: Some(5), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.epochs, 5);
+    }
+
+    #[test]
+    fn apply_net_overrides_sets_batch_size() {
+        let mut config = make_config();
+        let overrides = NetOverrides { batch_size: Some(16), ..NetOverrides::default() };
+        apply_net_overrides(&mut config, &overrides).unwrap();
+        assert_eq!(config.batch_size, 16);
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(0.0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_negative_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(-0.01), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_infinite_learning_rate() {
+        let mut config = make_config();
+        let overrides = NetOverrides { learning_rate: Some(f64::INFINITY), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_epochs() {
+        let mut config = make_config();
+        let overrides = NetOverrides { epochs: Some(0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_rejects_zero_batch_size() {
+        let mut config = make_config();
+        let overrides = NetOverrides { batch_size: Some(0), ..NetOverrides::default() };
+        assert!(apply_net_overrides(&mut config, &overrides).is_err());
+    }
+
+    #[test]
+    fn apply_net_overrides_is_noop_when_all_none() {
+        let mut config = make_config();
+        apply_net_overrides(&mut config, &NetOverrides::default()).unwrap();
+        assert!((config.learning_rate - 0.01).abs() < 1e-12);
+        assert_eq!(config.epochs, 10);
+        assert_eq!(config.batch_size, 8);
+    }
+}

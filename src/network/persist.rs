@@ -127,3 +127,141 @@ impl Network {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::{
+        activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
+    };
+
+    fn three_layer_net() -> Network {
+        Network::new()
+            .add_layer(Layer::new(2, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(4, 4, ActivationFunction::Tanh, WeightInitializer::Xavier))
+            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .build()
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_error() {
+        let result = Network::load("/tmp/this_file_does_not_exist_mlp.json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_invalid_json_returns_error() {
+        let path = std::env::temp_dir().join(format!(
+            "mlp_invalid_json_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, "not valid json {{").unwrap();
+        let result = Network::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_model_with_fewer_than_three_layers_returns_error() {
+        // Build a JSON with only 2 layers (bypassing Network builder)
+        let json = serde_json::json!({
+            "learning_rate": 0.01,
+            "layers": [
+                {
+                    "weights": [[0.1, 0.2]],
+                    "bias": [0.0, 0.0],
+                    "activation": "sigmoid"
+                },
+                {
+                    "weights": [[0.3], [0.4]],
+                    "bias": [0.0],
+                    "activation": "sigmoid"
+                }
+            ]
+        })
+        .to_string();
+
+        let path = std::env::temp_dir().join(format!(
+            "mlp_two_layers_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, json).unwrap();
+        let result = Network::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_layer_with_empty_weights_returns_error() {
+        let json = serde_json::json!({
+            "learning_rate": 0.01,
+            "layers": [
+                { "weights": [], "bias": [], "activation": "sigmoid" },
+                { "weights": [[0.1]], "bias": [0.0], "activation": "sigmoid" },
+                { "weights": [[0.2]], "bias": [0.0], "activation": "sigmoid" }
+            ]
+        })
+        .to_string();
+
+        let path = std::env::temp_dir().join(format!(
+            "mlp_empty_weights_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, json).unwrap();
+        let result = Network::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_layer_with_mismatched_bias_length_returns_error() {
+        // First layer: weights are 2×2 (2 columns), but bias has 3 elements.
+        let json = serde_json::json!({
+            "learning_rate": 0.01,
+            "layers": [
+                {
+                    "weights": [[0.1, 0.2], [0.3, 0.4]],
+                    "bias": [0.0, 0.0, 0.0],
+                    "activation": "sigmoid"
+                },
+                {
+                    "weights": [[0.3], [0.4]],
+                    "bias": [0.0],
+                    "activation": "sigmoid"
+                },
+                {
+                    "weights": [[0.5]],
+                    "bias": [0.0],
+                    "activation": "sigmoid"
+                }
+            ]
+        })
+        .to_string();
+
+        let path = std::env::temp_dir().join(format!(
+            "mlp_bias_mismatch_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, json).unwrap();
+        let result = Network::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+        let Err(e) = result else { unreachable!() };
+        let msg = e.to_string();
+        assert!(msg.contains("bias"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn save_and_load_roundtrip_three_layer_net() {
+        let net = three_layer_net();
+        let path = std::env::temp_dir().join(format!(
+            "mlp_persist_unit_{}.json",
+            std::process::id()
+        ));
+        net.save(&path).unwrap();
+        let loaded = Network::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.layers.len(), 3);
+        assert!((loaded.learning_rate - net.learning_rate).abs() < 1e-12);
+    }
+}

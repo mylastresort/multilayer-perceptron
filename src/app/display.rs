@@ -155,3 +155,68 @@ pub fn print_loaded_config(
         )
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{activation_label, group_label, initializer_label, print_loaded_config,
+                print_loaded_dataset, print_verbose_config};
+    use mlp::network::{
+        activation::ActivationFunction,
+        config::LayerGroup,
+        initializer::WeightInitializer,
+    };
+
+    fn minimal_config() -> mlp::network::config::NetworkConfig {
+        let yaml = r#"
+learning_rate: 0.01
+epochs: 1
+batch_size: 8
+input_layers:
+  - size: 4
+hidden_layers:
+  - size: 4
+  - size: 4
+output_layers:
+  - size: 2
+"#;
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn activation_label_covers_all_variants() {
+        assert_eq!(activation_label(ActivationFunction::Sigmoid), "sigmoid");
+        assert_eq!(activation_label(ActivationFunction::Tanh), "tanh");
+        assert_eq!(activation_label(ActivationFunction::ReLU), "relu");
+        assert_eq!(activation_label(ActivationFunction::Softmax), "softmax");
+    }
+
+    #[test]
+    fn initializer_label_covers_all_variants() {
+        assert_eq!(initializer_label(WeightInitializer::Random), "random");
+        assert_eq!(initializer_label(WeightInitializer::Xavier), "xavier");
+        assert_eq!(initializer_label(WeightInitializer::He), "he");
+    }
+
+    #[test]
+    fn group_label_covers_all_variants() {
+        assert_eq!(group_label(LayerGroup::Input), "input");
+        assert_eq!(group_label(LayerGroup::Hidden), "hidden");
+        assert_eq!(group_label(LayerGroup::Output), "output");
+    }
+
+    #[test]
+    fn print_loaded_dataset_does_not_panic() {
+        print_loaded_dataset("test_data.csv", 100, 31);
+    }
+
+    #[test]
+    fn print_loaded_config_does_not_panic() {
+        print_loaded_config("config.yaml", 0.01, 84, 8, 4);
+    }
+
+    #[test]
+    fn print_verbose_config_does_not_panic() {
+        let config = minimal_config();
+        print_verbose_config(&config, "test_data.csv", "config.yaml");
+    }
+}

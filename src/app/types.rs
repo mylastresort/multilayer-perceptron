@@ -62,3 +62,19 @@ pub struct NetOverrides {
     pub epochs: Option<usize>,
     pub batch_size: Option<usize>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::MonitorOptions;
+    use mlp::training::monitor::{MonitorMode, MonitoredMetric};
+
+    #[test]
+    fn monitor_options_default_has_sensible_values() {
+        let opts = MonitorOptions::default();
+        assert!(!opts.early_stopping);
+        assert_eq!(opts.monitor_patience, 10);
+        assert!(matches!(opts.monitor_mode, MonitorMode::Min));
+        assert!(matches!(opts.monitor_metric, MonitoredMetric::Loss));
+        assert!(opts.history_out.is_none());
+    }
+}

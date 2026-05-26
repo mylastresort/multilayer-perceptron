@@ -140,3 +140,112 @@ pub fn accuracy(predictions: &Array2<f64>, targets: &Array2<f64>) -> f64 {
     let target_labels_arr = ndarray::Array1::from(target_labels);
     compute_classification_scores_from_labels(predictions.view(), target_labels_arr.view()).accuracy
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{accuracy, compute_classification_scores_from_labels};
+    use ndarray::{arr1, arr2};
+
+    // -----------------------------------------------------------------------
+    // compute_classification_scores_from_labels
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scores_empty_predictions_returns_default() {
+        let preds = arr2(&[[0.0_f64; 2]; 0]); // 0 rows
+        let targets = arr1(&[0.0_f64; 0]);
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert_eq!(scores.accuracy, 0.0);
+        assert_eq!(scores.precision, 0.0);
+    }
+
+    #[test]
+    fn scores_mismatched_rows_returns_default() {
+        let preds = arr2(&[[0.8, 0.2], [0.3, 0.7]]);
+        let targets = arr1(&[0.0]); // only 1 target for 2 rows
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert_eq!(scores.accuracy, 0.0);
+    }
+
+    #[test]
+    fn scores_binary_single_column_perfect_classification() {
+        // Single-output: ≥ 0.5 → class 1, < 0.5 → class 0
+        let preds = arr2(&[[0.9], [0.1], [0.8], [0.2]]);
+        let targets = arr1(&[1.0, 0.0, 1.0, 0.0]);
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert!((scores.accuracy - 1.0).abs() < 1e-9);
+        assert!((scores.precision - 1.0).abs() < 1e-9);
+        assert!((scores.recall - 1.0).abs() < 1e-9);
+        assert!((scores.f1_score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scores_binary_single_column_partial_errors() {
+        // pred 0.6 vs target 0.0 is a false positive
+        let preds = arr2(&[[0.9], [0.6], [0.1], [0.2]]);
+        let targets = arr1(&[1.0, 0.0, 0.0, 0.0]);
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert!(scores.accuracy < 1.0);
+    }
+
+    #[test]
+    fn scores_multiclass_perfect_classification() {
+        // 3 classes: argmax picks correct class each time
+        let preds = arr2(&[[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]);
+        let targets = arr1(&[0.0, 1.0, 2.0]);
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert!((scores.accuracy - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scores_all_wrong_predictions_zero_accuracy() {
+        let preds = arr2(&[[0.1, 0.9], [0.1, 0.9]]);
+        let targets = arr1(&[0.0, 0.0]); // correct class is 0, pred always 1
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert_eq!(scores.accuracy, 0.0);
+    }
+
+    #[test]
+    fn scores_precision_zero_when_no_tp_and_fp_match() {
+        // No predicted positive for class 1, tp+fp = 0 → precision = 0
+        let preds = arr2(&[[0.9, 0.1], [0.9, 0.1]]);
+        let targets = arr1(&[1.0, 1.0]);
+        let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
+        assert_eq!(scores.accuracy, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // accuracy function
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn accuracy_empty_predictions_returns_zero() {
+        let preds = arr2(&[[0.0_f64; 2]; 0]);
+        let targets = arr2(&[[0.0_f64; 2]; 0]);
+        assert_eq!(accuracy(&preds, &targets), 0.0);
+    }
+
+    #[test]
+    fn accuracy_mismatched_rows_returns_zero() {
+        let preds = arr2(&[[0.8, 0.2]]);
+        let targets = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
+        assert_eq!(accuracy(&preds, &targets), 0.0);
+    }
+
+    #[test]
+    fn accuracy_single_column_target() {
+        let preds = arr2(&[[0.9], [0.1]]);
+        let targets = arr2(&[[1.0], [0.0]]);
+        let acc = accuracy(&preds, &targets);
+        assert!((acc - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn accuracy_multiclass_target_one_hot_style() {
+        let preds = arr2(&[[0.8, 0.2], [0.3, 0.7]]);
+        // targets as one-hot encoded (argmax picks col 0 and col 1 respectively)
+        let targets = arr2(&[[1.0, 0.0], [0.0, 1.0]]);
+        let acc = accuracy(&preds, &targets);
+        assert!((acc - 1.0).abs() < 1e-9);
+    }
+}
