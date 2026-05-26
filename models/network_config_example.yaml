@@ -1,29 +1,75 @@
 # Example network configuration using grouped layer sections.
-# Only `size` is required per layer; `activation` and `initializer` are optional.
-# Defaults when omitted:
-# - hidden layer activation: sigmoid
-# - output layer activation: softmax
-# - initializer: he
+# Only `size` is required per layer; most attributes are optional.
+#
+# Config defaults when omitted:
 # - learning_rate: 0.0314
 # - epochs: 84
 # - batch_size: 8
+# - hidden-layer activation: sigmoid
+# - output-layer activation: softmax
+# - initializer: he
+#
+# Monitoring defaults used by CLI (not currently loaded from YAML in code):
+# - monitor_metrics: loss,accuracy
+# - monitor_primary: loss
+# - monitor_mode: min
+# - monitor_patience: 10
+# - monitor_min_delta: 0.0
+# - monitor_start_epoch: 0
 
 learning_rate: 0.02
+# learning_rate: 0.0314 # Optional default
+
 epochs: 120
+# epochs: 84 # Optional default
+
 batch_size: 16
+# batch_size: 8 # Optional default
+
+# Monitoring examples (kept here as reference for --monitor-* CLI options)
+monitor_metrics:
+  - loss
+  - accuracy
+  - precision
+  - recall
+  - f1
+# monitor_metrics:
+#   - loss
+#   - accuracy # Optional default set
+
+monitor_primary: loss
+# monitor_primary: loss # Optional default
+
+monitor_mode: min
+# monitor_mode: min # Optional default
+
+monitor_patience: 12
+# monitor_patience: 10 # Optional default
+
+monitor_min_delta: 0.0001
+# monitor_min_delta: 0.0 # Optional default
+
+monitor_start_epoch: 5
+# monitor_start_epoch: 0 # Optional default
+
+# monitor_early_stopping: true # Optional CLI flag: --monitor-early-stopping
+# monitor_history_out: reports/history.json # Optional CLI arg: --monitor-history-out
+# gui: true # Optional CLI flag: --gui
 
 input_layers:
   - size: 30
+    # activation: sigmoid # Optional (input stage defaults to next-layer behavior)
+    # initializer: he # Optional default
 
 hidden_layers:
   - size: 32
     activation: relu
     initializer: xavier
   - size: 16
-    # activation: sigmoid
-    # initializer: he
+    # activation: sigmoid # Optional default for hidden layers
+    # initializer: he # Optional default
 
 output_layers:
   - size: 2
-    # activation: softmax
-    # initializer: he
+    # activation: softmax # Optional default for output layers
+    # initializer: he # Optional default

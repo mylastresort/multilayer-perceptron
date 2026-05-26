@@ -1,18 +1,51 @@
 use std::error::Error;
 
+use mlp::console::{Tone, bold, paint};
 use mlp::data::loader::{Dataset, load_dataset};
 use mlp::network::callbacks::{Callback, ProgressLogger};
 use mlp::network::config::{LayerGroup, NetworkConfig};
 use mlp::network::{activation::ActivationFunction, initializer::WeightInitializer};
+use mlp::training::monitor::{
+    EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback, MonitorMode, MonitoredMetric,
+    parse_monitored_metrics,
+};
 use mlp::training::{loss::LossFunction, optimizer::OptimizerType};
-use mlp::visualization::live_monitor::LiveTrainingMonitorCallback;
+use mlp::visualization::live_monitor::{GuiMonitorConfig, LiveTrainingMonitorCallback};
 use ndarray::{Array2, Axis, s};
 
 struct CliArgs {
     dataset_path: String,
     config_path: String,
     verbose: bool,
+    gui: bool,
+    monitor_options: MonitorOptions,
     net_overrides: NetOverrides,
+}
+
+struct MonitorOptions {
+    metrics: Vec<MonitoredMetric>,
+    early_stopping: bool,
+    monitor_metric: MonitoredMetric,
+    monitor_mode: MonitorMode,
+    monitor_patience: usize,
+    monitor_min_delta: f64,
+    monitor_start_epoch: usize,
+    history_out: Option<String>,
+}
+
+impl Default for MonitorOptions {
+    fn default() -> Self {
+        Self {
+            metrics: vec![MonitoredMetric::Loss, MonitoredMetric::Accuracy],
+            early_stopping: false,
+            monitor_metric: MonitoredMetric::Loss,
+            monitor_mode: MonitorMode::Min,
+            monitor_patience: 10,
+            monitor_min_delta: 0.0,
+            monitor_start_epoch: 0,
+            history_out: None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -35,16 +68,37 @@ fn default_config_path() -> String {
 
 fn usage(binary_name: &str) -> String {
     format!(
-                "Usage: {binary_name} [--dataset <path>] [--config <path>] [--verbose]\n\
-         Defaults:\n\
-                     --dataset {}\n\
-                     --config  {}\n\
-                 Flags:\n\
-                     --verbose, -v  Print loaded config in a visual summary\n\
-                 Network Overrides:\n\
-                     --net-learning-rate <float>  Override config learning_rate\n\
-                     --net-epochs <int>           Override config epochs\n\
-                     --net-batch-size <int>       Override config batch_size",
+        concat!(
+            "Usage: {} [OPTIONS]\n",
+            "\n",
+            "Options:\n",
+            "  -d, --dataset <PATH>               Dataset CSV path\n",
+            "  -c, --config <PATH>                Network/training YAML config path\n",
+            "  -v, --verbose                      Print loaded config in a visual summary\n",
+            "  -g, --gui                          Open live learning-curve GUI window\n",
+            "  -h, --help                         Print help\n",
+            "\n",
+            "Monitoring:\n",
+            "  -M, --monitor-metrics <CSV>        Metrics to monitor/plot\n",
+            "                                      Allowed: loss,accuracy,precision,recall,f1\n",
+            "  -m, --monitor-primary <METRIC>     Metric used for early stopping\n",
+            "      --monitor-mode <MODE>          Early-stopping direction [min|max]\n",
+            "  -p, --monitor-patience <INT>       Early-stopping patience in epochs\n",
+            "      --monitor-min-delta <FLOAT>    Minimum improvement threshold\n",
+            "  -s, --monitor-start-epoch <INT>    Epoch to start early-stopping checks\n",
+            "      --monitor-early-stopping       Enable early stopping\n",
+            "      --monitor-history-out <PATH>   Save per-epoch metric history to JSON\n",
+            "\n",
+            "Network Overrides:\n",
+            "  -l, --net-learning-rate <FLOAT>    Override config learning_rate\n",
+            "  -e, --net-epochs <INT>             Override config epochs\n",
+            "  -b, --net-batch-size <INT>         Override config batch_size\n",
+            "\n",
+            "Defaults:\n",
+            "  --dataset {}\n",
+            "  --config  {}"
+        ),
+        binary_name,
         default_dataset_path(),
         default_config_path()
     )
@@ -57,6 +111,8 @@ fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
     let mut dataset_path = default_dataset_path();
     let mut config_path = default_config_path();
     let mut verbose = false;
+    let mut gui = false;
+    let mut monitor_options = MonitorOptions::default();
     let mut net_overrides = NetOverrides::default();
 
     let mut pending_flag: Option<String> = None;
@@ -65,24 +121,51 @@ fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
             match flag.as_str() {
                 "--dataset" | "-d" => dataset_path = arg,
                 "--config" | "-c" => config_path = arg,
-                "--net-learning-rate" => {
+                "--net-learning-rate" | "-l" => {
                     net_overrides.learning_rate = Some(
                         arg.parse::<f64>()
                             .map_err(|_| format!("Invalid value for --net-learning-rate: {arg}"))?,
                     );
                 }
-                "--net-epochs" => {
+                "--net-epochs" | "-e" => {
                     net_overrides.epochs = Some(
                         arg.parse::<usize>()
                             .map_err(|_| format!("Invalid value for --net-epochs: {arg}"))?,
                     );
                 }
-                "--net-batch-size" => {
+                "--net-batch-size" | "-b" => {
                     net_overrides.batch_size = Some(
                         arg.parse::<usize>()
                             .map_err(|_| format!("Invalid value for --net-batch-size: {arg}"))?,
                     );
                 }
+                "--monitor-metrics" | "-M" => {
+                    monitor_options.metrics = parse_monitored_metrics(&arg)?;
+                }
+                "--monitor-primary" | "-m" => {
+                    monitor_options.monitor_metric = MonitoredMetric::parse(&arg)
+                        .ok_or_else(|| format!("Invalid value for --monitor-primary: {arg}"))?;
+                }
+                "--monitor-mode" => {
+                    monitor_options.monitor_mode = MonitorMode::parse(&arg)
+                        .ok_or_else(|| format!("Invalid value for --monitor-mode: {arg}"))?;
+                }
+                "--monitor-patience" | "-p" => {
+                    monitor_options.monitor_patience = arg
+                        .parse::<usize>()
+                        .map_err(|_| format!("Invalid value for --monitor-patience: {arg}"))?;
+                }
+                "--monitor-min-delta" => {
+                    monitor_options.monitor_min_delta = arg
+                        .parse::<f64>()
+                        .map_err(|_| format!("Invalid value for --monitor-min-delta: {arg}"))?;
+                }
+                "--monitor-start-epoch" | "-s" => {
+                    monitor_options.monitor_start_epoch = arg
+                        .parse::<usize>()
+                        .map_err(|_| format!("Invalid value for --monitor-start-epoch: {arg}"))?;
+                }
+                "--monitor-history-out" => monitor_options.history_out = Some(arg),
                 _ => unreachable!("unsupported flag in parser state"),
             }
             continue;
@@ -94,9 +177,25 @@ fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
             | "--config"
             | "-c"
             | "--net-learning-rate"
+            | "-l"
             | "--net-epochs"
-            | "--net-batch-size" => pending_flag = Some(arg),
+            | "-e"
+            | "--net-batch-size"
+            | "-b"
+            | "--monitor-metrics"
+            | "-M"
+            | "--monitor-primary"
+            | "-m"
+            | "--monitor-mode"
+            | "--monitor-patience"
+            | "-p"
+            | "--monitor-min-delta"
+            | "--monitor-start-epoch"
+            | "-s"
+            | "--monitor-history-out" => pending_flag = Some(arg),
             "--verbose" | "-v" => verbose = true,
+            "--gui" | "-g" => gui = true,
+            "--monitor-early-stopping" => monitor_options.early_stopping = true,
             "--help" | "-h" => {
                 println!("{}", usage(&binary_name));
                 std::process::exit(0);
@@ -115,6 +214,8 @@ fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
         dataset_path,
         config_path,
         verbose,
+        gui,
+        monitor_options,
         net_overrides,
     })
 }
@@ -170,38 +271,41 @@ fn group_label(group: LayerGroup) -> &'static str {
 }
 
 fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_path: &str) {
-    println!("+------------------------------------------------------------+");
-    println!("|                 MLP LOADED CONFIG SUMMARY                  |");
-    println!("+------------------------------------------------------------+");
-    println!(" Dataset path : {}", dataset_path);
-    println!(" Config path  : {}", config_path);
-    println!(" Learning rate: {:.6}", config.learning_rate);
-    println!(" Epochs       : {}", config.epochs);
-    println!(" Batch size   : {}", config.batch_size);
+    println!("{}", paint("+------------------------------------------------------------+", Tone::Accent));
+    println!("{}", bold(&paint("|                 MLP LOADED CONFIG SUMMARY                  |", Tone::Accent)));
+    println!("{}", paint("+------------------------------------------------------------+", Tone::Accent));
+    println!(" {} {}", paint("Dataset path :", Tone::Info), dataset_path);
+    println!(" {} {}", paint("Config path  :", Tone::Info), config_path);
+    println!(" {} {:.6}", paint("Learning rate:", Tone::Info), config.learning_rate);
+    println!(" {} {}", paint("Epochs       :", Tone::Info), config.epochs);
+    println!(" {} {}", paint("Batch size   :", Tone::Info), config.batch_size);
 
     let input_sizes: Vec<usize> = config.input_layers.iter().map(|layer| layer.size).collect();
     let hidden_sizes: Vec<usize> = config.hidden_layers.iter().map(|layer| layer.size).collect();
     let output_sizes: Vec<usize> = config.output_layers.iter().map(|layer| layer.size).collect();
-    println!(" Input layers : {:?}", input_sizes);
-    println!(" Hidden layers: {:?}", hidden_sizes);
-    println!(" Output layers: {:?}", output_sizes);
+    println!(" {} {:?}", paint("Input layers :", Tone::TrainMetric), input_sizes);
+    println!(" {} {:?}", paint("Hidden layers:", Tone::TrainMetric), hidden_sizes);
+    println!(" {} {:?}", paint("Output layers:", Tone::ValMetric), output_sizes);
 
-    println!("--------------------------------------------------------------");
-    println!(" Resolved transitions (with defaults):");
+    println!("{}", paint("--------------------------------------------------------------", Tone::Muted));
+    println!(" {}", bold(&paint("Resolved transitions (with defaults):", Tone::Info)));
 
     for (idx, spec) in config.resolved_layer_specs().iter().enumerate() {
         println!(
-            "  {:>2}. {:>3} -> {:>3} | to={} | activation={} | initializer={}",
+            "  {:>2}. {:>3} -> {:>3} | {}={} | {}={} | {}={}",
             idx + 1,
             spec.from_size,
             spec.to_size,
+            paint("to", Tone::Muted),
             group_label(spec.to_group),
+            paint("activation", Tone::Muted),
             activation_label(spec.activation),
+            paint("initializer", Tone::Muted),
             initializer_label(spec.initializer)
         );
     }
 
-    println!("+------------------------------------------------------------+");
+    println!("{}", paint("+------------------------------------------------------------+", Tone::Accent));
 }
 
 fn build_dataset(dataset_path: &str) -> Result<Dataset, Box<dyn Error>> {
@@ -245,6 +349,8 @@ fn standardize_from_train(x_train: &Array2<f64>, x_other: &Array2<f64>) -> (Arra
 fn train_from_dataset(
     dataset: &Dataset,
     network_config: &NetworkConfig,
+    gui: bool,
+    monitor_options: &MonitorOptions,
 ) -> Result<(), Box<dyn Error>> {
     // Baseline feature prep mirrors training_learning_curve_test.
     let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
@@ -274,9 +380,26 @@ fn train_from_dataset(
     let epochs = network_config.epochs;
     let batch_size = network_config.batch_size;
 
-    let mut monitor = LiveTrainingMonitorCallback::from_env();
+    let mut monitor = LiveTrainingMonitorCallback::new(GuiMonitorConfig::from_env(
+        gui,
+        monitor_options.metrics.clone(),
+    ));
+    let mut history = HistoryCallback::new();
+    let mut early_stopping = EarlyStoppingCallback::new(EarlyStoppingConfig {
+        enabled: monitor_options.early_stopping,
+        metric: monitor_options.monitor_metric,
+        mode: monitor_options.monitor_mode,
+        patience: monitor_options.monitor_patience,
+        min_delta: monitor_options.monitor_min_delta,
+        start_epoch: monitor_options.monitor_start_epoch,
+    });
     let mut progress_logger = ProgressLogger::new(epochs);
-    let mut callbacks: Vec<&mut dyn Callback> = vec![&mut monitor, &mut progress_logger];
+    let mut callbacks: Vec<&mut dyn Callback> = vec![
+        &mut monitor,
+        &mut history,
+        &mut early_stopping,
+        &mut progress_logger,
+    ];
 
     let metrics = network.fit_with_callbacks(
         x_train.view(),
@@ -292,13 +415,46 @@ fn train_from_dataset(
     drop(callbacks);
 
     println!(
-        "Training summary: train_loss={:.4}, val_loss={:.4}, train_acc={:.4}, val_acc={:.4}",
-        metrics.train_loss, metrics.val_loss, metrics.train_accuracy, metrics.val_accuracy
+        "{} {} - {} - {} - {}",
+        bold(&paint("Training summary:", Tone::Success)),
+        paint(&format!("train_loss={:.4}", metrics.train_loss), Tone::TrainMetric),
+        paint(&format!("val_loss={:.4}", metrics.val_loss), Tone::ValMetric),
+        paint(&format!("train_acc={:.4}", metrics.train_accuracy), Tone::TrainMetric),
+        paint(&format!("val_acc={:.4}", metrics.val_accuracy), Tone::ValMetric)
     );
     println!(
-        "Monitor collected {} epoch points",
-        monitor.history_len()
+        "{} {}",
+        paint("Monitor points:", Tone::Info),
+        paint(&format!("{} epochs", monitor.history_len()), Tone::Accent)
     );
+    println!(
+        "{} {}",
+        paint("History records:", Tone::Info),
+        paint(&format!("{} epochs", history.history().epochs.len()), Tone::Accent)
+    );
+    if let Some(best_epoch) = early_stopping.best_epoch() {
+        println!(
+            "{} {}",
+            paint("Early stopping best epoch:", Tone::Warn),
+            paint(&best_epoch.to_string(), Tone::Warn)
+        );
+    }
+    if early_stopping.stopped() {
+        println!(
+            "{} {}",
+            paint("Early stopping triggered on metric", Tone::Warn),
+            paint(monitor_options.monitor_metric.as_str(), Tone::Warn)
+        );
+    }
+
+    if let Some(path) = &monitor_options.history_out {
+        history.save_json(path)?;
+        println!(
+            "{} {}",
+            paint("Saved metric history:", Tone::Success),
+            path
+        );
+    }
 
     monitor.keep_open_until_closed();
     Ok(())
@@ -316,21 +472,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!(
-        "Loaded dataset from {}: rows={}, cols={}",
+        "{} {} {}",
+        bold(&paint("Loaded dataset:", Tone::Info)),
         cli_args.dataset_path,
-        dataset.features.nrows(),
-        dataset.features.ncols()
+        paint(
+            &format!("(rows={}, cols={})", dataset.features.nrows(), dataset.features.ncols()),
+            Tone::Muted
+        )
     );
     println!(
-        "Loaded network config from {}: learning_rate={}, epochs={}, batch_size={}, layers={}",
+        "{} {} {}",
+        bold(&paint("Loaded config:", Tone::Info)),
         cli_args.config_path,
-        network.learning_rate,
-        network_config.epochs,
-        network_config.batch_size,
-        network.layers.len()
+        paint(
+            &format!(
+                "(learning_rate={}, epochs={}, batch_size={}, layers={})",
+                network.learning_rate,
+                network_config.epochs,
+                network_config.batch_size,
+                network.layers.len()
+            ),
+            Tone::Muted
+        )
     );
 
-    train_from_dataset(&dataset, &network_config)?;
+    train_from_dataset(&dataset, &network_config, cli_args.gui, &cli_args.monitor_options)?;
 
     Ok(())
 }
