@@ -1,0 +1,29 @@
+# Example network configuration using grouped layer sections.
+# Only `size` is required per layer; `activation` and `initializer` are optional.
+# Defaults when omitted:
+# - hidden layer activation: sigmoid
+# - output layer activation: softmax
+# - initializer: he
+# - learning_rate: 0.0314
+# - epochs: 84
+# - batch_size: 8
+
+learning_rate: 0.02
+epochs: 120
+batch_size: 16
+
+input_layers:
+  - size: 30
+
+hidden_layers:
+  - size: 32
+    activation: relu
+    initializer: xavier
+  - size: 16
+    # activation: sigmoid
+    # initializer: he
+
+output_layers:
+  - size: 2
+    # activation: softmax
+    # initializer: he

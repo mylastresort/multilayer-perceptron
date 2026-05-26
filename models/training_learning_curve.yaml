@@ -1,0 +1,24 @@
+learning_rate: 0.0314 # Optional. Default is 0.0314 if omitted.
+epochs: 84 # Optional. Default is 84 if omitted.
+batch_size: 8 # Optional. Default is 8 if omitted.
+
+input_layers: # Required section.
+  - size: 30 # Required.
+    # activation: sigmoid # Optional. Not used for pure input, default hidden behavior is sigmoid.
+    # initializer: he # Optional. Default is he.
+
+hidden_layers: # Required section.
+  - size: 24 # Required.
+    # activation: sigmoid # Optional. Default hidden activation is sigmoid.
+    # initializer: he # Optional. Default is he.
+  - size: 24 # Required.
+    # activation: sigmoid # Optional. Default hidden activation is sigmoid.
+    # initializer: he # Optional. Default is he.
+  - size: 24 # Required.
+    # activation: sigmoid # Optional. Default hidden activation is sigmoid.
+    # initializer: he # Optional. Default is he.
+
+output_layers: # Required section.
+  - size: 2 # Required.
+    # activation: softmax # Optional. Default output activation is softmax.
+    # initializer: he # Optional. Default is he.
