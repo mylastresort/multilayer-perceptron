@@ -25,7 +25,7 @@ fn build_dataset() -> Result<Dataset, Box<dyn Error>> {
     }
 
     let csv_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
-    load_dataset(&csv_path, 1, names, 0)
+    load_dataset(&csv_path, 0, names, 0)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

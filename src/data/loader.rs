@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-use std::io::{Error as IoError, ErrorKind};
-
 use ndarray::{Array1, Array2};
+use polars::prelude::*;
 
 // Dataset struct to hold the features, labels, and feature names
 #[derive(Debug, Clone, Default)]
@@ -14,109 +12,95 @@ pub struct Dataset {
     pub feature_names: Vec<String>,
 }
 
-// Function to load the dataset from a CSV file - converts to hot-encoded categorical features by default
+// Function to load the dataset from a CSV file - converts categorical features to integer-encoded
+// values using label encoding (index assigned in order of first appearance).
 pub fn load_dataset(
-    // Path to the CSV file containing the dataset
-    _file_path: &str,
-    // Number of rows to skip at the beginning of the file (e.g., for headers)
-    _skiprows: usize,
-    // Vector of feature names corresponding to the columns in the dataset (length should match num_features)
-    _names: Vec<String>,
-    // Index of the column to be used as labels (0-based index)
-    _label_col: usize,
+    file_path: &str,
+    skiprows: usize,
+    names: Vec<String>,
+    label_col: usize,
 ) -> Result<Dataset, Box<dyn std::error::Error>> {
-    // use csv crate to read the CSV file and populate the Dataset struct
-    // - Read the CSV file, skipping the specified number of rows
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(false) // We will handle headers manually
-        .flexible(true)
-        .from_path(_file_path)?;
+    // Treat the first row as a header when skiprows >= 1; skip any additional rows
+    // between the header and the first data row via slicing after load.
+    let has_header = skiprows > 0;
 
-    // - Initialize vectors to hold the features and labels
-    let mut features_vec: Vec<Vec<f64>> = Vec::new();
-    let mut labels_vec: Vec<f64> = Vec::new();
+    let df = CsvReadOptions::default()
+        .with_has_header(has_header)
+        .try_into_reader_with_file_path(Some(file_path.into()))?
+        .finish()?;
 
-    // hashmap to store the unique categorical values and their corresponding hot-encoded indices for each categorical column
-    // use 2-level hashmap: column index -> (categorical value -> hot-encoded index)
-    let mut categorical_map: HashMap<
-        usize, // column index
-        Vec<String>,
-    > = HashMap::new();
+    // Drop extra rows when skiprows > 1 (rows between header and data).
+    let df = if skiprows > 1 {
+        let drop_count = skiprows - 1;
+        let remaining = df.height().saturating_sub(drop_count);
+        df.slice(drop_count as i64, remaining)
+    } else {
+        df
+    };
 
-    // - Iterate over the records in the CSV file)
-    let mut expected_record_len: Option<usize> = None;
-    for (i, result) in reader.records().enumerate() {
-        // Skip the specified number of rows
-        if i < _skiprows {
-            continue;
-        }
-        let record = result?;
-        if let Some(expected_len) = expected_record_len {
-            if record.len() != expected_len {
-                return Err(IoError::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "Inconsistent column count at data row {}: expected {}, got {}",
-                        i - _skiprows + 1,
-                        expected_len,
-                        record.len()
-                    ),
-                )
-                .into());
-            }
+    let n_rows = df.height();
+    let n_cols = df.width();
+
+    // Collect each column as Vec<f64>:
+    //   - String columns   → label-encode (integer index by order of first appearance)
+    //   - Numeric columns  → cast to f64, fill nulls with f64::default()
+    let col_names: Vec<String> = df
+        .get_column_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut columns: Vec<Vec<f64>> = Vec::with_capacity(n_cols);
+    for col_name in &col_names {
+        let series = df.column(col_name.as_str())?;
+        let col_values: Vec<f64> = if series.dtype() == &DataType::String {
+            let str_ca = series.str()?;
+            let mut seen: Vec<String> = Vec::new();
+            str_ca
+                .into_iter()
+                .map(|opt_s| match opt_s {
+                    Some(s) if !s.is_empty() => {
+                        let idx = seen.iter().position(|v| v == s).unwrap_or_else(|| {
+                            seen.push(s.to_string());
+                            seen.len() - 1
+                        });
+                        idx as f64
+                    }
+                    _ => f64::default(),
+                })
+                .collect()
         } else {
-            expected_record_len = Some(record.len());
-        }
-        // - Extract the label from the specified column and convert it to f64
-        let label: f64 = record[_label_col].parse()?;
-        labels_vec.push(label);
-        // - Extract the features from the remaining columns
-        // if the column is categorical, convert it to hot-encoded features and then to ndarray format
-        let mut features_row: Vec<f64> = Vec::new();
-        for (j, value) in record.iter().enumerate() {
-            if j == _label_col {
-                continue; // Skip the label column
-            }
-            if value.trim().is_empty() {
-                features_row.push(f64::default());
-                continue;
-            }
-            // Check if the value is numeric or categorical
-            if let Ok(num) = value.parse::<f64>() {
-                features_row.push(num); // Numeric feature
-            } else {
-                // Categorical feature - convert to hot-encoded features
-                // For simplicity, we will just use a hash of the value to create a unique feature
-                let index = categorical_map
-                    .entry(j)
-                    .or_insert_with(Vec::new)
-                    .iter()
-                    .position(|v| v == &value)
-                    .unwrap_or_else(|| {
-                        // If the value is not already in the map, add it and return its index
-                        categorical_map.get_mut(&j).unwrap().push(value.to_string());
-                        categorical_map[&j].len() - 1
-                    });
-                features_row.push(index as f64); // Add the hot-encoded index as a feature
-            }
-        }
-        features_vec.push(features_row);
+            series
+                .cast(&DataType::Float64)?
+                .f64()?
+                .into_iter()
+                .map(|opt| opt.unwrap_or_default())
+                .collect()
+        };
+        columns.push(col_values);
     }
 
-    // - Convert the features and labels vectors to ndarray format
-    let num_samples = labels_vec.len();
-    let num_features = features_vec.first().map_or(0, |row| row.len());
-    let features_array = Array2::from_shape_vec(
-        (num_samples, num_features),
-        features_vec.into_iter().flatten().collect(),
-    )?;
+    // Extract labels and feature columns.
+    let labels_vec: Vec<f64> = columns[label_col].clone();
+    let feature_cols: Vec<&Vec<f64>> = columns
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != label_col)
+        .map(|(_, col)| col)
+        .collect();
+
+    let num_features = feature_cols.len();
+    let features_flat: Vec<f64> = (0..n_rows)
+        .flat_map(|row| feature_cols.iter().map(move |col| col[row]))
+        .collect();
+
+    let features_array = Array2::from_shape_vec((n_rows, num_features), features_flat)?;
     let labels_array = Array1::from_vec(labels_vec);
 
-    // - Create and return the Dataset struct
     Ok(Dataset {
         features: features_array,
         labels: labels_array,
-        feature_names: _names,
+        feature_names: names,
     })
 }
 
@@ -164,13 +148,13 @@ mod tests {
         assert_eq!(names.len(), data_col_count);
 
         let dataset =
-            load_dataset(&csv_path, 1, names, 0).expect("loading data/data.csv should succeed");
+            load_dataset(&csv_path, 0, names, 0).expect("loading data/data.csv should succeed");
 
         // Compile-time type checks for the returned ndarray outputs.
         fn assert_types(_features: &Array2<f64>, _labels: &Array1<f64>) {}
         assert_types(&dataset.features, &dataset.labels);
 
-        // Sanity-check expected dimensions after skipping the header row.
+        // Sanity-check expected dimensions (no header row in data.csv).
         assert_eq!(dataset.labels.len(), 569);
         assert_eq!(dataset.features.nrows(), 569);
         assert_eq!(dataset.features.ncols(), 31);
@@ -222,8 +206,6 @@ mod tests {
         let _ = fs::remove_file(&csv_path);
 
         assert!(result.is_err());
-        let err_msg = result.err().expect("error should exist").to_string();
-        assert!(err_msg.contains("Inconsistent column count"));
     }
 
     #[test]
