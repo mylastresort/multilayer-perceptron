@@ -3,7 +3,7 @@ use std::error::Error;
 use mlp::network::config::NetworkConfig;
 use mlp::training::monitor::{MonitorMode, MonitoredMetric, parse_monitored_metrics};
 
-use super::types::{CliArgs, MonitorOptions, NetOverrides};
+use super::types::{CliArgs, MonitorOptions, NetOverrides, Subcommand};
 
 pub fn default_dataset_path() -> String {
     format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"))
@@ -19,38 +19,49 @@ pub fn default_config_path() -> String {
 pub fn usage(binary_name: &str) -> String {
     format!(
         concat!(
-            "Usage: {} [OPTIONS]\n",
+            "Usage: {bin} <SUBCOMMAND> [OPTIONS]\n",
             "\n",
-            "Options:\n",
+            "Subcommands:\n",
+            "  split    Separate the dataset into train and validation CSV files\n",
+            "  train    Train the network and save the model\n",
+            "  predict  Load a saved model and evaluate on a dataset (binary cross-entropy)\n",
+            "\n",
+            "Common options:\n",
             "  -d, --dataset <PATH>               Dataset CSV path\n",
-            "  -c, --config <PATH>                Network/training YAML config path\n",
-            "  -v, --verbose                      Print loaded config in a visual summary\n",
-            "  -g, --gui                          Open live learning-curve GUI window\n",
             "  -h, --help                         Print help\n",
             "\n",
-            "Monitoring:\n",
+            "split options:\n",
+            "      --train-out <PATH>             Output CSV for training split\n",
+            "      --val-out   <PATH>             Output CSV for validation split\n",
+            "      --ratio     <FLOAT>            Training fraction (default 0.8)\n",
+            "\n",
+            "train options:\n",
+            "  -c, --config    <PATH>             Network/training YAML config path\n",
+            "      --model-out <PATH>             Where to save the trained model (JSON)\n",
+            "  -v, --verbose                      Print loaded config summary\n",
+            "  -g, --gui                          Open live learning-curve GUI\n",
             "  -M, --monitor-metrics <CSV>        Metrics to monitor/plot\n",
-            "                                      Allowed: loss,accuracy,precision,recall,f1\n",
-            "  -m, --monitor-primary <METRIC>     Metric used for early stopping\n",
+            "  -m, --monitor-primary <METRIC>     Metric for early stopping\n",
             "      --monitor-mode <MODE>          Early-stopping direction [min|max]\n",
             "  -p, --monitor-patience <INT>       Early-stopping patience in epochs\n",
             "      --monitor-min-delta <FLOAT>    Minimum improvement threshold\n",
             "  -s, --monitor-start-epoch <INT>    Epoch to start early-stopping checks\n",
             "      --monitor-early-stopping       Enable early stopping\n",
             "      --monitor-history-out <PATH>   Save per-epoch metric history to JSON\n",
-            "\n",
-            "Network Overrides:\n",
             "  -l, --net-learning-rate <FLOAT>    Override config learning_rate\n",
             "  -e, --net-epochs <INT>             Override config epochs\n",
             "  -b, --net-batch-size <INT>         Override config batch_size\n",
             "\n",
+            "predict options:\n",
+            "      --model <PATH>                 Path to a saved model JSON\n",
+            "\n",
             "Defaults:\n",
-            "  --dataset {}\n",
-            "  --config  {}"
+            "  --dataset {dataset}\n",
+            "  --config  {config}",
         ),
-        binary_name,
-        default_dataset_path(),
-        default_config_path()
+        bin = binary_name,
+        dataset = default_dataset_path(),
+        config = default_config_path(),
     )
 }
 
@@ -58,19 +69,53 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
     let mut args = std::env::args();
     let binary_name = args.next().unwrap_or_else(|| "mlp".to_string());
 
+    // Collect remaining args so we can peek at the subcommand first.
+    let rest: Vec<String> = args.collect();
+
+    // Handle top-level --help with no subcommand.
+    if rest.is_empty() || rest[0] == "--help" || rest[0] == "-h" {
+        println!("{}", usage(&binary_name));
+        std::process::exit(0);
+    }
+
+    let subcommand = match rest[0].as_str() {
+        "split" => Subcommand::Split,
+        "train" => Subcommand::Train,
+        "predict" => Subcommand::Predict,
+        other => {
+            return Err(
+                format!("Unknown subcommand: '{other}'\n{}", usage(&binary_name)).into(),
+            );
+        }
+    };
+
     let mut dataset_path = default_dataset_path();
     let mut config_path = default_config_path();
     let mut verbose = false;
     let mut gui = false;
     let mut monitor_options = MonitorOptions::default();
     let mut net_overrides = NetOverrides::default();
+    let mut model_out: Option<String> = None;
+    let mut model_in: Option<String> = None;
+    let mut split_ratio: f64 = 0.8;
+    let mut train_out: Option<String> = None;
+    let mut val_out: Option<String> = None;
 
     let mut pending_flag: Option<String> = None;
-    for arg in args {
+    for arg in rest.into_iter().skip(1) {
         if let Some(flag) = pending_flag.take() {
             match flag.as_str() {
                 "--dataset" | "-d" => dataset_path = arg,
                 "--config" | "-c" => config_path = arg,
+                "--model-out" => model_out = Some(arg),
+                "--model" => model_in = Some(arg),
+                "--train-out" => train_out = Some(arg),
+                "--val-out" => val_out = Some(arg),
+                "--ratio" => {
+                    split_ratio = arg
+                        .parse::<f64>()
+                        .map_err(|_| format!("Invalid value for --ratio: {arg}"))?;
+                }
                 "--net-learning-rate" | "-l" => {
                     net_overrides.learning_rate =
                         Some(arg.parse::<f64>().map_err(|_| {
@@ -126,6 +171,11 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
             | "-d"
             | "--config"
             | "-c"
+            | "--model-out"
+            | "--model"
+            | "--train-out"
+            | "--val-out"
+            | "--ratio"
             | "--net-learning-rate"
             | "-l"
             | "--net-epochs"
@@ -161,12 +211,18 @@ pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
     }
 
     Ok(CliArgs {
+        subcommand,
         dataset_path,
         config_path,
         verbose,
         gui,
         monitor_options,
         net_overrides,
+        model_out,
+        model_in,
+        split_ratio,
+        train_out,
+        val_out,
     })
 }
 
