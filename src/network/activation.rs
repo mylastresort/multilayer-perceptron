@@ -1,8 +1,8 @@
 use ndarray::{Array2, Axis};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // List of activation functions that can be used in the neural network.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActivationFunction {
     Sigmoid,
@@ -171,5 +171,18 @@ mod tests {
         let y_shifted = activation.forward(&shifted);
 
         assert_matrix_close(&y, &y_shifted, 1e-12);
+    }
+
+    #[test]
+    fn softmax_derivative_is_elementwise_s_times_one_minus_s() {
+        let activation = ActivationFunction::Softmax;
+        let x = arr2(&[[1.0, 2.0, 3.0]]);
+
+        let s = activation.forward(&x);
+        let dy = activation.derivative(&x);
+
+        // derivative = s * (1 - s) elementwise
+        let expected = &s * &(1.0 - &s);
+        assert_matrix_close(&dy, &expected, 1e-12);
     }
 }

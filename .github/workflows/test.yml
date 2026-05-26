@@ -46,6 +46,7 @@ jobs:
       - name: Generate coverage (lcov format for Codecov)
         run: |
           cargo tarpaulin \
+            --engine llvm \
             --out Lcov \
             --output-dir coverage \
             --jobs $(nproc) \
