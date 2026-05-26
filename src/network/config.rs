@@ -91,7 +91,11 @@ impl NetworkConfig {
 
     pub fn resolved_layer_specs(&self) -> Vec<LayerTransitionSpec> {
         let mut groups: Vec<(LayerGroup, &LayerConfig)> = Vec::new();
-        groups.extend(self.input_layers.iter().map(|layer| (LayerGroup::Input, layer)));
+        groups.extend(
+            self.input_layers
+                .iter()
+                .map(|layer| (LayerGroup::Input, layer)),
+        );
         groups.extend(
             self.hidden_layers
                 .iter()
@@ -163,7 +167,6 @@ impl NetworkConfig {
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]
