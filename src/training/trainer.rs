@@ -2,6 +2,7 @@ use ndarray::{ArrayView1, ArrayView2};
 use rand::seq::SliceRandom;
 
 use crate::{
+    console::{Tone, bold, paint},
     network::{
         callbacks::{Callback, CallbackLogs},
         model::Network,
@@ -128,6 +129,12 @@ impl Trainer {
                     val_loss: None,
                     accuracy: None,
                     val_accuracy: None,
+                    precision: None,
+                    val_precision: None,
+                    recall: None,
+                    val_recall: None,
+                    f1: None,
+                    val_f1: None,
                 };
                 for callback in callbacks.iter_mut() {
                     callback.on_batch_end(batch_index, Some(&batch_logs));
@@ -172,9 +179,24 @@ impl Trainer {
                 val_loss: val_data.map(|_| metrics.val_loss),
                 accuracy: Some(metrics.train_accuracy),
                 val_accuracy: val_data.map(|_| metrics.val_accuracy),
+                precision: Some(metrics.train_precision),
+                val_precision: val_data.map(|_| metrics.val_precision),
+                recall: Some(metrics.train_recall),
+                val_recall: val_data.map(|_| metrics.val_recall),
+                f1: Some(metrics.train_f1),
+                val_f1: val_data.map(|_| metrics.val_f1),
             };
             for callback in callbacks.iter_mut() {
                 callback.on_epoch_end(epoch, Some(&epoch_logs));
+            }
+
+            if callbacks.iter().any(|callback| callback.should_stop()) {
+                println!(
+                    "{} {}",
+                    paint("Early stopping:", Tone::Warn),
+                    paint(&format!("stopped at epoch {}", epoch + 1), Tone::Warn)
+                );
+                break;
             }
         }
 
@@ -183,13 +205,33 @@ impl Trainer {
         }
 
         println!(
-            "Training finished - accuracy: {:.4} - precision: {:.4} - recall: {:.4} - f1_score: {:.4}",
-            metrics.train_accuracy, metrics.train_precision, metrics.train_recall, metrics.train_f1
+            "{} {} - {} - {} - {}",
+            bold(&paint("Training finished", Tone::Success)),
+            paint(&format!("accuracy={:.4}", metrics.train_accuracy), Tone::TrainMetric),
+            paint(
+                &format!("precision={:.4}", metrics.train_precision),
+                Tone::TrainMetric
+            ),
+            paint(&format!("recall={:.4}", metrics.train_recall), Tone::TrainMetric),
+            paint(&format!("f1={:.4}", metrics.train_f1), Tone::TrainMetric)
         );
         if val_data.is_some() {
             println!(
-                "Validation metrics - val_accuracy: {:.4} - val_precision: {:.4} - val_recall: {:.4} - val_f1_score: {:.4}",
-                metrics.val_accuracy, metrics.val_precision, metrics.val_recall, metrics.val_f1
+                "{} {} - {} - {} - {}",
+                paint("Validation:", Tone::Info),
+                paint(
+                    &format!("val_accuracy={:.4}", metrics.val_accuracy),
+                    Tone::ValMetric
+                ),
+                paint(
+                    &format!("val_precision={:.4}", metrics.val_precision),
+                    Tone::ValMetric
+                ),
+                paint(
+                    &format!("val_recall={:.4}", metrics.val_recall),
+                    Tone::ValMetric
+                ),
+                paint(&format!("val_f1={:.4}", metrics.val_f1), Tone::ValMetric)
             );
         }
 

@@ -1,7 +1,10 @@
 use ndarray::Array2;
 use ndarray_rand::{RandomExt, rand::distributions::Standard, rand_distr::Uniform};
+use serde::Deserialize;
 
 // List of weight initialization methods for the network
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WeightInitializer {
     Random,
     Xavier,

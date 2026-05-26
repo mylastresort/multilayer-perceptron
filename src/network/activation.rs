@@ -1,9 +1,13 @@
 use ndarray::{Array2, Axis};
+use serde::Deserialize;
 
 // List of activation functions that can be used in the neural network.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ActivationFunction {
     Sigmoid,
     Tanh,
+    #[serde(alias = "relu", alias = "ReLU")]
     ReLU,
     Softmax,
 }

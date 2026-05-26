@@ -1,9 +1,17 @@
+use crate::console::{Tone, bold, paint};
+
 #[derive(Debug, Clone, Default)]
 pub struct CallbackLogs {
     pub loss: Option<f64>,
     pub val_loss: Option<f64>,
     pub accuracy: Option<f64>,
     pub val_accuracy: Option<f64>,
+    pub precision: Option<f64>,
+    pub val_precision: Option<f64>,
+    pub recall: Option<f64>,
+    pub val_recall: Option<f64>,
+    pub f1: Option<f64>,
+    pub val_f1: Option<f64>,
 }
 
 pub struct ProgressLogger {
@@ -23,14 +31,33 @@ impl Callback for ProgressLogger {
         };
 
         let epoch_display = epoch + 1;
-        let loss = logs.loss.unwrap_or(f64::NAN);
-        let val_loss = logs.val_loss.unwrap_or(f64::NAN);
-        let accuracy = logs.accuracy.unwrap_or(f64::NAN);
-        let val_accuracy = logs.val_accuracy.unwrap_or(f64::NAN);
+
+        let ordered_metrics: [(&str, Option<f64>); 10] = [
+            ("loss", logs.loss),
+            ("val_loss", logs.val_loss),
+            ("accuracy", logs.accuracy),
+            ("val_accuracy", logs.val_accuracy),
+            ("precision", logs.precision),
+            ("val_precision", logs.val_precision),
+            ("recall", logs.recall),
+            ("val_recall", logs.val_recall),
+            ("f1", logs.f1),
+            ("val_f1", logs.val_f1),
+        ];
+
+        let mut parts: Vec<String> = Vec::new();
+        for (name, value) in ordered_metrics {
+            if let Some(v) = value {
+                parts.push(format!("{}={:.4}", name, v));
+            }
+        }
 
         println!(
-            "Display progress: epoch {:02}/{} - loss: {:.4} - val_loss: {:.4} - accuracy: {:.4} - val_accuracy: {:.4}",
-            epoch_display, self.total_epochs, loss, val_loss, accuracy, val_accuracy
+            "{} {}/{} - {}",
+            bold("Epoch"),
+            paint(&format!("{:02}", epoch_display), Tone::Accent),
+            self.total_epochs,
+            parts.join(" - ")
         );
     }
 }
@@ -51,4 +78,9 @@ pub trait Callback {
 
     fn on_test_begin(&mut self) {}
     fn on_test_end(&mut self) {}
+
+    // Allows callbacks like EarlyStopping to request stopping the training loop.
+    fn should_stop(&self) -> bool {
+        false
+    }
 }

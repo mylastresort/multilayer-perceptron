@@ -1,3 +1,4 @@
+pub mod console;
 pub mod data;
 pub mod network;
 pub mod training;
