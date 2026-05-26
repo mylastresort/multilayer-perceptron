@@ -113,7 +113,7 @@ pub fn train_from_dataset(
         Some((x_val.view(), y_val.view())),
         batch_size,
         epochs,
-        OptimizerType::SGD,
+        OptimizerType::from(network_config.optimizer),
         LossFunction::CategoricalCrossEntropy,
         &mut callbacks,
     );

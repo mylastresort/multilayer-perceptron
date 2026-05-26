@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::network::{
     activation::ActivationFunction, initializer::WeightInitializer, layer::Layer, model::Network,
 };
+use crate::training::optimizer::OptimizerKind;
 
 #[derive(Debug, Clone, Copy)]
 pub enum LayerGroup {
@@ -30,6 +31,8 @@ pub struct NetworkConfig {
     pub epochs: usize,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
+    #[serde(default)]
+    pub optimizer: OptimizerKind,
     pub input_layers: Vec<LayerConfig>,
     pub hidden_layers: Vec<LayerConfig>,
     pub output_layers: Vec<LayerConfig>,
