@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use ndarray::{Array2, ArrayView1, ArrayView2};
 
+/// Aggregated metrics from a training epoch (train and validation).
 #[derive(Debug, Default)]
 pub struct Metrics {
     pub train_loss: f64,
@@ -10,18 +11,13 @@ pub struct Metrics {
     pub val_accuracy: f64,
     pub train_precision: f64,
     pub val_precision: f64,
-    pub train_recall: f64,
-    pub val_recall: f64,
-    pub train_f1: f64,
-    pub val_f1: f64,
 }
 
+/// Per-class classification scores (macro-averaged across classes).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClassificationScores {
     pub accuracy: f64,
     pub precision: f64,
-    pub recall: f64,
-    pub f1_score: f64,
 }
 
 fn predicted_class_from_row(row: ndarray::ArrayView1<'_, f64>) -> usize {
@@ -36,6 +32,7 @@ fn predicted_class_from_row(row: ndarray::ArrayView1<'_, f64>) -> usize {
     }
 }
 
+/// Computes macro-averaged accuracy and precision from predictions and labels.
 pub fn compute_classification_scores_from_labels(
     predictions: ArrayView2<'_, f64>,
     targets: ArrayView1<'_, f64>,
@@ -70,20 +67,16 @@ pub fn compute_classification_scores_from_labels(
     }
 
     let mut precision_sum = 0.0;
-    let mut recall_sum = 0.0;
-    let mut f1_sum = 0.0;
 
     for class_id in classes.iter().copied() {
         let mut tp = 0usize;
         let mut fp = 0usize;
-        let mut fn_ = 0usize;
 
         for (pred, true_) in pred_labels.iter().zip(true_labels.iter()) {
             match (*pred == class_id, *true_ == class_id) {
                 (true, true) => tp += 1,
                 (true, false) => fp += 1,
-                (false, true) => fn_ += 1,
-                (false, false) => {}
+                (false, _) => {}
             }
         }
 
@@ -92,31 +85,18 @@ pub fn compute_classification_scores_from_labels(
         } else {
             tp as f64 / ((tp + fp) as f64)
         };
-        let recall = if tp + fn_ == 0 {
-            0.0
-        } else {
-            tp as f64 / ((tp + fn_) as f64)
-        };
-        let f1 = if precision + recall == 0.0 {
-            0.0
-        } else {
-            2.0 * precision * recall / (precision + recall)
-        };
 
         precision_sum += precision;
-        recall_sum += recall;
-        f1_sum += f1;
     }
 
     let class_count = classes.len() as f64;
     ClassificationScores {
         accuracy,
         precision: precision_sum / class_count,
-        recall: recall_sum / class_count,
-        f1_score: f1_sum / class_count,
     }
 }
 
+/// Computes accuracy from 2D prediction arrays and 2D target arrays.
 pub fn accuracy(predictions: &Array2<f64>, targets: &Array2<f64>) -> f64 {
     if predictions.nrows() == 0 || predictions.nrows() != targets.nrows() {
         return 0.0;
@@ -175,8 +155,6 @@ mod tests {
         let scores = compute_classification_scores_from_labels(preds.view(), targets.view());
         assert!((scores.accuracy - 1.0).abs() < 1e-9);
         assert!((scores.precision - 1.0).abs() < 1e-9);
-        assert!((scores.recall - 1.0).abs() < 1e-9);
-        assert!((scores.f1_score - 1.0).abs() < 1e-9);
     }
 
     #[test]

@@ -46,7 +46,8 @@ pub fn usage(binary_name: &str) -> String {
             "  -p, --monitor-patience <INT>       Early-stopping patience in epochs\n",
             "      --monitor-min-delta <FLOAT>    Minimum improvement threshold\n",
             "  -s, --monitor-start-epoch <INT>    Epoch to start early-stopping checks\n",
-            "      --monitor-early-stopping       Enable early stopping\n",
+            "      --monitor-early-stopping       Enable early stopping (on by default)\n",
+            "      --no-early-stopping            Disable early stopping\n",
             "      --monitor-history-out <PATH>   Save per-epoch metric history to JSON\n",
             "  -l, --net-learning-rate <FLOAT>    Override config learning_rate\n",
             "  -e, --net-epochs <INT>             Override config epochs\n",
@@ -78,9 +79,7 @@ pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn
         "train" => Subcommand::Train,
         "predict" => Subcommand::Predict,
         other => {
-            return Err(
-                format!("Unknown subcommand: '{other}'\n{}", usage(binary_name)).into(),
-            );
+            return Err(format!("Unknown subcommand: '{other}'\n{}", usage(binary_name)).into());
         }
     };
 
@@ -191,6 +190,7 @@ pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn
             "--verbose" | "-v" => verbose = true,
             "--gui" | "-g" => gui = true,
             "--monitor-early-stopping" => monitor_options.early_stopping = true,
+            "--no-early-stopping" => monitor_options.early_stopping = false,
             "--help" | "-h" => {
                 return Err(usage(binary_name).into());
             }
@@ -218,29 +218,6 @@ pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn
         train_out,
         val_out,
     })
-}
-
-/// Thin wrapper around [`parse_args`] that reads from `std::env::args()` and
-/// prints usage + exits with code 0 when `--help` / `-h` is requested.
-/// Excluded from coverage instrumentation because it calls `process::exit`.
-#[cfg(not(tarpaulin_include))]
-pub fn parse_cli_args() -> Result<CliArgs, Box<dyn Error>> {
-    let mut env_args = std::env::args();
-    let binary_name = env_args.next().unwrap_or_else(|| "mlp".to_string());
-    let rest: Vec<String> = env_args.collect();
-
-    let is_help = rest.is_empty()
-        || rest[0] == "--help"
-        || rest[0] == "-h"
-        || rest.iter().any(|a| a == "--help" || a == "-h");
-
-    match parse_args(&binary_name, &rest) {
-        Err(e) if is_help => {
-            println!("{e}");
-            std::process::exit(0);
-        }
-        other => other,
-    }
 }
 
 pub fn apply_net_overrides(
@@ -274,8 +251,8 @@ pub fn apply_net_overrides(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_net_overrides, default_config_path, default_dataset_path, parse_args, usage,
-        NetOverrides,
+        NetOverrides, apply_net_overrides, default_config_path, default_dataset_path, parse_args,
+        usage,
     };
     use mlp::network::config::NetworkConfig;
 
@@ -431,7 +408,13 @@ output_layers:
 
     #[test]
     fn parse_args_split_train_out_and_val_out() {
-        let args = ss(&["split", "--train-out", "/tmp/train.csv", "--val-out", "/tmp/val.csv"]);
+        let args = ss(&[
+            "split",
+            "--train-out",
+            "/tmp/train.csv",
+            "--val-out",
+            "/tmp/val.csv",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.train_out.as_deref(), Some("/tmp/train.csv"));
         assert_eq!(cli.val_out.as_deref(), Some("/tmp/val.csv"));
@@ -533,6 +516,20 @@ output_layers:
     }
 
     #[test]
+    fn parse_args_no_early_stopping_flag() {
+        let args = ss(&["train", "--no-early-stopping"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(!cli.monitor_options.early_stopping);
+    }
+
+    #[test]
+    fn parse_args_early_stopping_defaults_to_true() {
+        let args = ss(&["train"]);
+        let cli = parse_args("mlp", &args).unwrap();
+        assert!(cli.monitor_options.early_stopping);
+    }
+
+    #[test]
     fn parse_args_monitor_patience_long() {
         let args = ss(&["train", "--monitor-patience", "5"]);
         let cli = parse_args("mlp", &args).unwrap();
@@ -589,14 +586,20 @@ output_layers:
     fn parse_args_monitor_history_out() {
         let args = ss(&["train", "--monitor-history-out", "/tmp/history.json"]);
         let cli = parse_args("mlp", &args).unwrap();
-        assert_eq!(cli.monitor_options.history_out.as_deref(), Some("/tmp/history.json"));
+        assert_eq!(
+            cli.monitor_options.history_out.as_deref(),
+            Some("/tmp/history.json")
+        );
     }
 
     #[test]
     fn parse_args_monitor_mode_valid() {
         let args = ss(&["train", "--monitor-mode", "min"]);
         let cli = parse_args("mlp", &args).unwrap();
-        assert!(matches!(cli.monitor_options.monitor_mode, mlp::training::monitor::MonitorMode::Min));
+        assert!(matches!(
+            cli.monitor_options.monitor_mode,
+            mlp::training::monitor::MonitorMode::Min
+        ));
     }
 
     #[test]
@@ -693,7 +696,10 @@ output_layers:
     #[test]
     fn apply_net_overrides_sets_learning_rate() {
         let mut config = make_config();
-        let overrides = NetOverrides { learning_rate: Some(0.001), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            learning_rate: Some(0.001),
+            ..NetOverrides::default()
+        };
         apply_net_overrides(&mut config, &overrides).unwrap();
         assert!((config.learning_rate - 0.001).abs() < 1e-12);
     }
@@ -701,7 +707,10 @@ output_layers:
     #[test]
     fn apply_net_overrides_sets_epochs() {
         let mut config = make_config();
-        let overrides = NetOverrides { epochs: Some(5), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            epochs: Some(5),
+            ..NetOverrides::default()
+        };
         apply_net_overrides(&mut config, &overrides).unwrap();
         assert_eq!(config.epochs, 5);
     }
@@ -709,7 +718,10 @@ output_layers:
     #[test]
     fn apply_net_overrides_sets_batch_size() {
         let mut config = make_config();
-        let overrides = NetOverrides { batch_size: Some(16), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            batch_size: Some(16),
+            ..NetOverrides::default()
+        };
         apply_net_overrides(&mut config, &overrides).unwrap();
         assert_eq!(config.batch_size, 16);
     }
@@ -717,35 +729,50 @@ output_layers:
     #[test]
     fn apply_net_overrides_rejects_zero_learning_rate() {
         let mut config = make_config();
-        let overrides = NetOverrides { learning_rate: Some(0.0), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            learning_rate: Some(0.0),
+            ..NetOverrides::default()
+        };
         assert!(apply_net_overrides(&mut config, &overrides).is_err());
     }
 
     #[test]
     fn apply_net_overrides_rejects_negative_learning_rate() {
         let mut config = make_config();
-        let overrides = NetOverrides { learning_rate: Some(-0.01), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            learning_rate: Some(-0.01),
+            ..NetOverrides::default()
+        };
         assert!(apply_net_overrides(&mut config, &overrides).is_err());
     }
 
     #[test]
     fn apply_net_overrides_rejects_infinite_learning_rate() {
         let mut config = make_config();
-        let overrides = NetOverrides { learning_rate: Some(f64::INFINITY), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            learning_rate: Some(f64::INFINITY),
+            ..NetOverrides::default()
+        };
         assert!(apply_net_overrides(&mut config, &overrides).is_err());
     }
 
     #[test]
     fn apply_net_overrides_rejects_zero_epochs() {
         let mut config = make_config();
-        let overrides = NetOverrides { epochs: Some(0), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            epochs: Some(0),
+            ..NetOverrides::default()
+        };
         assert!(apply_net_overrides(&mut config, &overrides).is_err());
     }
 
     #[test]
     fn apply_net_overrides_rejects_zero_batch_size() {
         let mut config = make_config();
-        let overrides = NetOverrides { batch_size: Some(0), ..NetOverrides::default() };
+        let overrides = NetOverrides {
+            batch_size: Some(0),
+            ..NetOverrides::default()
+        };
         assert!(apply_net_overrides(&mut config, &overrides).is_err());
     }
 

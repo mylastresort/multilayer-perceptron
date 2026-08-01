@@ -450,8 +450,8 @@ fn loads_dataset_trains_and_generates_learning_curve_per_iteration() {
         .mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
 
     let n = x_raw.nrows();
-    let train_end = (0.70 * n as f64).round() as usize;
-    let val_end = (0.85 * n as f64).round() as usize;
+    let train_end = (0.85 * n as f64).round() as usize;
+    let val_end = n;
 
     let x_train_raw = x_raw.slice(s![0..train_end, ..]).to_owned();
     let x_val_raw = x_raw.slice(s![train_end..val_end, ..]).to_owned();

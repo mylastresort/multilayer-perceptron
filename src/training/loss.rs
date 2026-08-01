@@ -1,13 +1,25 @@
-use ndarray::{Array2, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
+/// Supported loss functions for training.
 pub enum LossFunction {
     MSE,
     BinaryCrossEntropy,
     CategoricalCrossEntropy,
 }
 
+/// Trait for loss functions, providing per-sample loss and gradient computation.
+///
+/// Neither `compute` nor `gradient` reduce over the batch: both return one
+/// value per sample. Reducing to a scalar (mean or sum) is a training concern
+/// and is handled by the caller (e.g. the trainer).
 pub trait Loss {
-    fn compute(&self, predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) -> f64;
+    /// Computes the per-sample loss for each sample in the batch.
+    fn compute(
+        &self,
+        predictions: ArrayView2<'_, f64>,
+        targets: ArrayView1<'_, f64>,
+    ) -> Array1<f64>;
+    /// Computes the per-sample gradient of the loss with respect to predictions.
     fn gradient(
         &self,
         predictions: ArrayView2<'_, f64>,
@@ -16,7 +28,11 @@ pub trait Loss {
 }
 
 impl Loss for LossFunction {
-    fn compute(&self, predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) -> f64 {
+    fn compute(
+        &self,
+        predictions: ArrayView2<'_, f64>,
+        targets: ArrayView1<'_, f64>,
+    ) -> Array1<f64> {
         if predictions.nrows() != targets.len() {
             panic!(
                 "predictions rows ({}) must match targets len ({})",
@@ -25,56 +41,54 @@ impl Loss for LossFunction {
             );
         }
 
+        let mut losses = Array1::zeros(predictions.nrows());
+
         match self {
             LossFunction::MSE => {
                 let cols = predictions.ncols();
-                let mut total = 0.0;
                 for (row_idx, row) in predictions.outer_iter().enumerate() {
                     let target = targets[row_idx];
+                    let mut total = 0.0;
                     for col_idx in 0..cols {
                         let diff = row[col_idx] - target;
                         total += diff * diff;
                     }
+                    losses[row_idx] = total / (cols as f64);
                 }
-                total / ((predictions.nrows() * cols) as f64)
             }
             LossFunction::BinaryCrossEntropy => {
                 let eps = 1e-12;
                 if predictions.ncols() == 1 {
-                    let mut total = 0.0;
                     for (row_idx, row) in predictions.outer_iter().enumerate() {
                         let y = targets[row_idx].clamp(0.0, 1.0);
                         let p = row[0].clamp(eps, 1.0 - eps);
-                        total += -(y * p.ln() + (1.0 - y) * (1.0 - p).ln());
+                        losses[row_idx] = -(y * p.ln() + (1.0 - y) * (1.0 - p).ln());
                     }
-                    total / (predictions.nrows() as f64)
                 } else {
-                    let mut total = 0.0;
                     for (row_idx, row) in predictions.outer_iter().enumerate() {
                         let class_idx = targets[row_idx]
                             .round()
                             .clamp(0.0, (predictions.ncols() - 1) as f64)
                             as usize;
                         let p = row[class_idx].clamp(eps, 1.0 - eps);
-                        total += -p.ln();
+                        losses[row_idx] = -p.ln();
                     }
-                    total / (predictions.nrows() as f64)
                 }
             }
             LossFunction::CategoricalCrossEntropy => {
                 let eps = 1e-12;
-                let mut total = 0.0;
                 for (row_idx, row) in predictions.outer_iter().enumerate() {
                     let class_idx = targets[row_idx]
                         .round()
                         .clamp(0.0, (predictions.ncols() - 1) as f64)
                         as usize;
                     let p = row[class_idx].clamp(eps, 1.0 - eps);
-                    total += -p.ln();
+                    losses[row_idx] = -p.ln();
                 }
-                total / (predictions.nrows() as f64)
             }
         }
+
+        losses
     }
 
     fn gradient(
@@ -92,7 +106,7 @@ impl Loss for LossFunction {
 
         match self {
             LossFunction::MSE => {
-                let scale = 2.0 / ((predictions.nrows() * predictions.ncols()) as f64);
+                let scale = 2.0 / (predictions.ncols() as f64);
                 let mut grad = predictions.to_owned();
                 for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
                     let target = targets[row_idx];
@@ -106,41 +120,32 @@ impl Loss for LossFunction {
                 let eps = 1e-12;
                 if predictions.ncols() == 1 {
                     let mut grad = Array2::zeros((predictions.nrows(), 1));
-                    let scale = 1.0 / (predictions.nrows() as f64);
                     for (row_idx, row) in predictions.outer_iter().enumerate() {
                         let y = targets[row_idx].clamp(0.0, 1.0);
                         let p = row[0].clamp(eps, 1.0 - eps);
-                        grad[[row_idx, 0]] = ((p - y) / (p * (1.0 - p))) * scale;
+                        grad[[row_idx, 0]] = (p - y) / (p * (1.0 - p));
                     }
                     grad
                 } else {
                     let mut grad = predictions.to_owned();
-                    let scale = 1.0 / (predictions.nrows() as f64);
                     for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
                         let class_idx = targets[row_idx]
                             .round()
                             .clamp(0.0, (predictions.ncols() - 1) as f64)
                             as usize;
                         row[class_idx] -= 1.0;
-                        for col_idx in 0..row.len() {
-                            row[col_idx] *= scale;
-                        }
                     }
                     grad
                 }
             }
             LossFunction::CategoricalCrossEntropy => {
                 let mut grad = predictions.to_owned();
-                let scale = 1.0 / (predictions.nrows() as f64);
                 for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
                     let class_idx = targets[row_idx]
                         .round()
                         .clamp(0.0, (predictions.ncols() - 1) as f64)
                         as usize;
                     row[class_idx] -= 1.0;
-                    for col_idx in 0..row.len() {
-                        row[col_idx] *= scale;
-                    }
                 }
                 grad
             }
@@ -161,17 +166,28 @@ mod tests {
     fn mse_compute_zero_when_predictions_equal_targets() {
         let preds = arr2(&[[1.0], [2.0], [3.0]]);
         let targets = arr1(&[1.0, 2.0, 3.0]);
-        let loss = LossFunction::MSE.compute(preds.view(), targets.view());
-        assert!(loss.abs() < 1e-12);
+        let losses = LossFunction::MSE.compute(preds.view(), targets.view());
+        for v in losses.iter() {
+            assert!(v.abs() < 1e-12, "expected zero loss, got {v}");
+        }
     }
 
     #[test]
     fn mse_compute_correct_value() {
-        // predictions = [[2.0]], targets = [0.0]  → MSE = (2-0)^2 / 1 = 4.0
+        // predictions = [[2.0]], targets = [0.0]  → per-sample MSE = (2-0)^2 / 1 = 4.0
         let preds = arr2(&[[2.0]]);
         let targets = arr1(&[0.0]);
-        let loss = LossFunction::MSE.compute(preds.view(), targets.view());
-        assert!((loss - 4.0).abs() < 1e-12);
+        let losses = LossFunction::MSE.compute(preds.view(), targets.view());
+        assert_eq!(losses.len(), 1);
+        assert!((losses[0] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mse_compute_returns_one_loss_per_sample() {
+        let preds = arr2(&[[1.0], [2.0], [3.0]]);
+        let targets = arr1(&[1.0, 2.0, 3.0]);
+        let losses = LossFunction::MSE.compute(preds.view(), targets.view());
+        assert_eq!(losses.len(), preds.nrows());
     }
 
     #[test]
@@ -210,8 +226,12 @@ mod tests {
         // p ≈ 1 for y=1 → loss ≈ 0
         let preds = arr2(&[[0.999_999]]);
         let targets = arr1(&[1.0]);
-        let loss = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
-        assert!(loss < 1e-4, "expected near-zero loss, got {loss}");
+        let losses = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
+        assert!(
+            losses[0] < 1e-4,
+            "expected near-zero loss, got {}",
+            losses[0]
+        );
     }
 
     #[test]
@@ -240,9 +260,9 @@ mod tests {
     fn bce_multi_col_compute_finite_for_valid_predictions() {
         let preds = arr2(&[[0.8, 0.2], [0.3, 0.7]]);
         let targets = arr1(&[0.0, 1.0]);
-        let loss = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
-        assert!(loss.is_finite());
-        assert!(loss > 0.0);
+        let losses = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
+        assert!(losses.iter().all(|l| l.is_finite()));
+        assert!(losses.iter().all(|l| *l > 0.0));
     }
 
     #[test]
@@ -261,9 +281,9 @@ mod tests {
     fn cce_compute_finite_for_valid_predictions() {
         let preds = arr2(&[[0.1, 0.7, 0.2], [0.8, 0.1, 0.1]]);
         let targets = arr1(&[1.0, 0.0]);
-        let loss = LossFunction::CategoricalCrossEntropy.compute(preds.view(), targets.view());
-        assert!(loss.is_finite());
-        assert!(loss > 0.0);
+        let losses = LossFunction::CategoricalCrossEntropy.compute(preds.view(), targets.view());
+        assert!(losses.iter().all(|l| l.is_finite()));
+        assert!(losses.iter().all(|l| *l > 0.0));
     }
 
     #[test]
@@ -280,8 +300,8 @@ mod tests {
         let preds = arr2(&[[0.2, 0.5, 0.3]]);
         let targets = arr1(&[1.0]);
         let grad = LossFunction::CategoricalCrossEntropy.gradient(preds.view(), targets.view());
-        // grad[0][1] = (0.5 - 1.0) * scale = -0.5
-        assert!(grad[[0, 1]] < 0.0);
+        // grad[0][1] = 0.5 - 1.0 = -0.5
+        assert!((grad[[0, 1]] - (-0.5)).abs() < 1e-12);
     }
 
     #[test]

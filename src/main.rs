@@ -2,7 +2,7 @@ mod app;
 
 use std::error::Error;
 
-use app::cli::{apply_net_overrides, parse_args, usage};
+use app::cli::{apply_net_overrides, parse_args};
 use app::display::{print_loaded_config, print_loaded_dataset, print_verbose_config};
 use app::predict::{PredictArgs, run_predict};
 use app::split::{SplitArgs, run_split};
@@ -77,17 +77,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 network.layers.len(),
             );
 
-            let trained = train_from_dataset(
+            train_from_dataset(
                 &dataset,
                 &network_config,
                 cli_args.gui,
                 &cli_args.monitor_options,
+                cli_args.model_out.as_deref().map(std::path::Path::new),
             )?;
-
-            if let Some(model_path) = &cli_args.model_out {
-                trained.save(model_path)?;
-                println!("Model saved to {model_path}");
-            }
         }
 
         // ---------------------------------------------------------------

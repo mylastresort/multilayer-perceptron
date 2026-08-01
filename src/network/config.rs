@@ -23,6 +23,7 @@ pub struct LayerTransitionSpec {
     pub initializer: WeightInitializer,
 }
 
+/// YAML-deserializable network architecture and training configuration.
 #[derive(Debug, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_learning_rate")]
@@ -33,6 +34,8 @@ pub struct NetworkConfig {
     pub batch_size: usize,
     #[serde(default)]
     pub optimizer: OptimizerKind,
+    #[serde(default)]
+    pub weight_decay: f64,
     pub input_layers: Vec<LayerConfig>,
     pub hidden_layers: Vec<LayerConfig>,
     pub output_layers: Vec<LayerConfig>,
@@ -70,6 +73,7 @@ fn default_initializer() -> WeightInitializer {
 }
 
 impl NetworkConfig {
+    /// Loads a [`NetworkConfig`] from a YAML file.
     pub fn from_yaml_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&raw)?;
@@ -77,6 +81,7 @@ impl NetworkConfig {
         Ok(config)
     }
 
+    /// Builds a [`Network`] from this configuration.
     pub fn build_network(&self) -> Network {
         let mut builder = Network::new().learning_rate(self.learning_rate);
 
@@ -92,6 +97,7 @@ impl NetworkConfig {
         builder.build()
     }
 
+    /// Resolves the full layer transition specs (sizes, activations, initializers).
     pub fn resolved_layer_specs(&self) -> Vec<LayerTransitionSpec> {
         let mut groups: Vec<(LayerGroup, &LayerConfig)> = Vec::new();
         groups.extend(
@@ -149,9 +155,7 @@ impl NetworkConfig {
         }
 
         if self.hidden_layers.len() < 2 {
-            return Err(
-                "network config must include at least 2 hidden layers".into(),
-            );
+            return Err("network config must include at least 2 hidden layers".into());
         }
 
         if self.output_layers.is_empty() {
@@ -256,7 +260,10 @@ output_layers:
 "#;
         let config: NetworkConfig = serde_yaml::from_str(yaml).expect("yaml should parse");
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("epochs"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("epochs"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -273,7 +280,10 @@ output_layers:
 "#;
         let config: NetworkConfig = serde_yaml::from_str(yaml).expect("yaml should parse");
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("batch_size"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("batch_size"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -334,10 +344,8 @@ output_layers:
     #[test]
     fn from_yaml_file_loads_valid_config() {
         use std::io::Write;
-        let path = std::env::temp_dir().join(format!(
-            "mlp_config_test_{}.yaml",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mlp_config_test_{}.yaml", std::process::id()));
         let yaml = r#"
 learning_rate: 0.001
 epochs: 5

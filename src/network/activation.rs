@@ -1,7 +1,7 @@
 use ndarray::{Array2, Axis};
 use serde::{Deserialize, Serialize};
 
-// List of activation functions that can be used in the neural network.
+/// Supported activation functions for neural network layers.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActivationFunction {
@@ -12,18 +12,18 @@ pub enum ActivationFunction {
     Softmax,
 }
 
-// Defines the trait for activation functions, which includes methods for forward and backward passes.
+/// Trait for activation functions, providing forward and backward (gradient) passes.
 pub trait Activation {
-    // Function to compute the activation function on the input data.
+    /// Computes the activation function: `f(x)`.
     fn as_function(&self, x: &Array2<f64>) -> Array2<f64>;
-    // Derivative of the activation function for backpropagation.
+    /// Computes the derivative `f'(x)` for backpropagation.
     fn derivative(&self, x: &Array2<f64>) -> Array2<f64>;
-    // Computes the forward pass of the activation function.
+    /// Forward pass: applies the activation function to the input.
     #[inline]
     fn forward(&self, x: &Array2<f64>) -> Array2<f64> {
         self.as_function(x)
     }
-    // Computes the backward pass (gradient) of the activation function.
+    /// Backward pass: multiplies upstream gradient by the activation derivative.
     #[inline]
     fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
         grad * self.derivative(x)
@@ -31,6 +31,20 @@ pub trait Activation {
 }
 
 impl Activation for ActivationFunction {
+    /// Backward pass. For the softmax activation this is an identity: when a
+    /// softmax output layer is paired with a cross-entropy loss, the loss
+    /// gradient is already the gradient with respect to the softmax *input*
+    /// (the softmax derivative is absorbed into the combined softmax +
+    /// cross-entropy gradient). Applying the elementwise s·(1−s) derivative
+    /// here would shrink the gradient by up to 4× and stall learning.
+    #[inline]
+    fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
+        match self {
+            ActivationFunction::Softmax => grad.clone(),
+            _ => grad * self.derivative(x),
+        }
+    }
+
     #[inline]
     fn as_function(&self, x: &Array2<f64>) -> Array2<f64> {
         match self {

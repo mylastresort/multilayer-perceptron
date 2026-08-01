@@ -45,10 +45,12 @@ impl Default for MonitorOptions {
     fn default() -> Self {
         Self {
             metrics: vec![MonitoredMetric::Loss, MonitoredMetric::Accuracy],
-            early_stopping: false,
+            // Early stopping is on by default so `restore_best_weights` keeps the
+            // best-epoch model; --no-early-stopping still opts out.
+            early_stopping: true,
             monitor_metric: MonitoredMetric::Loss,
             monitor_mode: MonitorMode::Min,
-            monitor_patience: 10,
+            monitor_patience: 60,
             monitor_min_delta: 0.0,
             monitor_start_epoch: 0,
             history_out: None,
@@ -71,8 +73,8 @@ mod tests {
     #[test]
     fn monitor_options_default_has_sensible_values() {
         let opts = MonitorOptions::default();
-        assert!(!opts.early_stopping);
-        assert_eq!(opts.monitor_patience, 10);
+        assert!(opts.early_stopping);
+        assert_eq!(opts.monitor_patience, 60);
         assert!(matches!(opts.monitor_mode, MonitorMode::Min));
         assert!(matches!(opts.monitor_metric, MonitoredMetric::Loss));
         assert!(opts.history_out.is_none());

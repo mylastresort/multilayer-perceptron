@@ -13,7 +13,7 @@ pub struct Dataset {
 }
 
 // Function to load the dataset from a CSV file - converts categorical features to integer-encoded
-// values using label encoding (index assigned in order of first appearance).
+// values using deterministic label encoding (sorted class order, independent of row order).
 pub fn load_dataset(
     file_path: &str,
     skiprows: usize,
@@ -42,7 +42,7 @@ pub fn load_dataset(
     let n_cols = df.width();
 
     // Collect each column as Vec<f64>:
-    //   - String columns   → label-encode (integer index by order of first appearance)
+    //   - String columns   → label-encode (integer index by sorted class order)
     //   - Numeric columns  → cast to f64, fill nulls with f64::default()
     let col_names: Vec<String> = df
         .get_column_names()
@@ -55,16 +55,18 @@ pub fn load_dataset(
         let series = df.column(col_name.as_str())?;
         let col_values: Vec<f64> = if series.dtype() == &DataType::String {
             let str_ca = series.str()?;
-            let mut seen: Vec<String> = Vec::new();
-            str_ca
-                .into_iter()
+            let values: Vec<Option<&str>> = str_ca.into_iter().collect();
+            let mut classes: Vec<String> = values
+                .iter()
+                .filter_map(|opt_s| opt_s.filter(|s| !s.is_empty()).map(|s| s.to_string()))
+                .collect();
+            classes.sort_unstable();
+            classes.dedup();
+            values
+                .iter()
                 .map(|opt_s| match opt_s {
                     Some(s) if !s.is_empty() => {
-                        let idx = seen.iter().position(|v| v == s).unwrap_or_else(|| {
-                            seen.push(s.to_string());
-                            seen.len() - 1
-                        });
-                        idx as f64
+                        classes.iter().position(|c| c.as_str() == *s).unwrap() as f64
                     }
                     _ => f64::default(),
                 })
@@ -161,6 +163,7 @@ mod tests {
         assert_eq!(dataset.feature_names.len(), 32);
 
         // Diagnosis is categorical and should produce exactly two encoded classes.
+        // Encoding is deterministic (sorted): "B" → 0, "M" → 1.
         let mut diagnosis_classes: Vec<i64> = dataset
             .features
             .column(0)
@@ -174,7 +177,7 @@ mod tests {
 
         // Spot-check a few known values from the first data row.
         assert_eq!(dataset.labels[0], 842302.0);
-        assert_eq!(dataset.features[[0, 0]], 0.0);
+        assert_eq!(dataset.features[[0, 0]], 1.0);
         assert!((dataset.features[[0, 1]] - 17.99).abs() < 1e-12);
     }
 
@@ -248,11 +251,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        let csv_path = std::env::temp_dir().join(format!(
-            "mlp_skiprows_{}_{}.csv",
-            process::id(),
-            timestamp
-        ));
+        let csv_path =
+            std::env::temp_dir().join(format!("mlp_skiprows_{}_{}.csv", process::id(), timestamp));
 
         // First row = header, second row = extra row to skip, rows 3-4 = data.
         let csv = "A,B\nskip_this_row,999\n1.0,2.0\n3.0,4.0\n";
@@ -272,6 +272,35 @@ mod tests {
         let dataset = result.expect("load with skiprows=2 should succeed");
         // After skipping one extra row, only the 2 data rows should remain.
         assert_eq!(dataset.features.nrows(), 2);
+    }
+
+    #[test]
+    fn load_dataset_encodes_strings_by_sorted_order_not_first_appearance() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        // Same rows, different row order: label encoding must be order-invariant.
+        let csv_m_first = "ID,Diagnosis,Value\n1,M,10.0\n2,B,11.0\n";
+        let csv_b_first = "ID,Diagnosis,Value\n2,B,11.0\n1,M,10.0\n";
+        let path_m =
+            std::env::temp_dir().join(format!("mlp_m_first_{}_{}.csv", process::id(), timestamp));
+        let path_b =
+            std::env::temp_dir().join(format!("mlp_b_first_{}_{}.csv", process::id(), timestamp));
+        fs::write(&path_m, csv_m_first).expect("temp csv should be writable");
+        fs::write(&path_b, csv_b_first).expect("temp csv should be writable");
+
+        // label_col = 0 → ID is the label, Diagnosis is the first feature column.
+        let m = load_dataset(path_m.to_str().unwrap(), 1, Vec::new(), 0).unwrap();
+        let b = load_dataset(path_b.to_str().unwrap(), 1, Vec::new(), 0).unwrap();
+        let _ = fs::remove_file(&path_m);
+        let _ = fs::remove_file(&path_b);
+
+        // Deterministic sorted encoding: "B" → 0, "M" → 1, regardless of row order.
+        assert_eq!(m.features[[0, 0]], 1.0, "M row in M-first file");
+        assert_eq!(m.features[[1, 0]], 0.0, "B row in M-first file");
+        assert_eq!(b.features[[0, 0]], 0.0, "B row in B-first file");
+        assert_eq!(b.features[[1, 0]], 1.0, "M row in B-first file");
     }
 
     #[test]

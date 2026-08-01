@@ -1,5 +1,7 @@
 use crate::console::{Tone, bold, paint};
+use crate::network::model::Network;
 
+/// Aggregated metric values passed to callbacks at epoch/batch boundaries.
 #[derive(Debug, Clone, Default)]
 pub struct CallbackLogs {
     pub loss: Option<f64>,
@@ -8,12 +10,9 @@ pub struct CallbackLogs {
     pub val_accuracy: Option<f64>,
     pub precision: Option<f64>,
     pub val_precision: Option<f64>,
-    pub recall: Option<f64>,
-    pub val_recall: Option<f64>,
-    pub f1: Option<f64>,
-    pub val_f1: Option<f64>,
 }
 
+/// Prints epoch metrics to the console in a Keras-style format.
 pub struct ProgressLogger {
     total_epochs: usize,
 }
@@ -32,17 +31,13 @@ impl Callback for ProgressLogger {
 
         let epoch_display = epoch + 1;
 
-        let ordered_metrics: [(&str, Option<f64>); 10] = [
+        let ordered_metrics: [(&str, Option<f64>); 6] = [
             ("loss", logs.loss),
             ("val_loss", logs.val_loss),
             ("accuracy", logs.accuracy),
             ("val_accuracy", logs.val_accuracy),
             ("precision", logs.precision),
             ("val_precision", logs.val_precision),
-            ("recall", logs.recall),
-            ("val_recall", logs.val_recall),
-            ("f1", logs.f1),
-            ("val_f1", logs.val_f1),
         ];
 
         let mut parts: Vec<String> = Vec::new();
@@ -62,13 +57,25 @@ impl Callback for ProgressLogger {
     }
 }
 
-// Keras-style callback placeholder API for train/eval/predict lifecycle hooks.
+/// Keras-style callback trait for train/eval/predict lifecycle hooks.
+///
+/// Implement [`Callback::should_stop`] to support early stopping.
 pub trait Callback {
     fn on_train_begin(&mut self) {}
     fn on_train_end(&mut self) {}
 
     fn on_epoch_begin(&mut self, _epoch: usize) {}
     fn on_epoch_end(&mut self, _epoch: usize, _logs: Option<&CallbackLogs>) {}
+
+    /// Called at the end of each epoch with mutable access to the network so
+    /// callbacks (e.g. early stopping) can snapshot or restore model weights.
+    fn on_epoch_end_network(
+        &mut self,
+        _epoch: usize,
+        _logs: Option<&CallbackLogs>,
+        _network: &mut Network,
+    ) {
+    }
 
     fn on_batch_begin(&mut self, _batch: usize) {}
     fn on_batch_end(&mut self, _batch: usize, _logs: Option<&CallbackLogs>) {}
@@ -99,10 +106,6 @@ mod tests {
             val_accuracy: Some(0.85),
             precision: Some(0.75),
             val_precision: Some(0.78),
-            recall: Some(0.70),
-            val_recall: Some(0.72),
-            f1: Some(0.72),
-            val_f1: Some(0.75),
         };
         // Should not panic, just print
         logger.on_epoch_end(4, Some(&logs));
@@ -117,7 +120,10 @@ mod tests {
     #[test]
     fn progress_logger_on_epoch_end_partial_logs() {
         let mut logger = ProgressLogger::new(3);
-        let logs = CallbackLogs { loss: Some(0.3), ..CallbackLogs::default() };
+        let logs = CallbackLogs {
+            loss: Some(0.3),
+            ..CallbackLogs::default()
+        };
         logger.on_epoch_end(0, Some(&logs));
     }
 

@@ -1,6 +1,14 @@
-learning_rate: 0.0314 # Optional. Default is 0.0314 if omitted.
-epochs: 84 # Optional. Default is 84 if omitted.
-batch_size: 8 # Optional. Default is 8 if omitted.
+learning_rate: 0.0005 # Optional. Default is 0.0314 if omitted.
+epochs: 250 # Optional. Default is 84 if omitted. Tuned via shuffled 80/20 evaluation.
+batch_size: 16 # Optional. Default is 8 if omitted.
+optimizer: adam # Optional. Default is sgd if omitted.
+weight_decay: 0.5 # Optional. Default is 0.0 if omitted (AdamW decoupled decay).
+
+# Tuned hyperparameters (see docs/evaluation/07-metrics.tex):
+# sigmoid 30 -> 24 -> 12 -> 2, Adam, lr 5e-4, weight decay 0.5, 250 epochs.
+# Expected best-of-3 test BCE ~0.083 on random 80/20 splits; the residual floor
+# comes from a few ambiguous/mislabeled "M" rows (e.g. 855133, 868202, 892189)
+# that score large losses whenever they land in the test split.
 
 input_layers: # Required section.
   - size: 30 # Required.
@@ -11,10 +19,7 @@ hidden_layers: # Required section.
   - size: 24 # Required.
     # activation: sigmoid # Optional. Default hidden activation is sigmoid.
     # initializer: he # Optional. Default is he.
-  - size: 24 # Required.
-    # activation: sigmoid # Optional. Default hidden activation is sigmoid.
-    # initializer: he # Optional. Default is he.
-  - size: 24 # Required.
+  - size: 12 # Required.
     # activation: sigmoid # Optional. Default hidden activation is sigmoid.
     # initializer: he # Optional. Default is he.
 

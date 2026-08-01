@@ -5,15 +5,25 @@ use crate::{
     training::{loss::LossFunction, metrics::Metrics, optimizer::OptimizerType, trainer::Trainer},
 };
 
-// Defines the Network struct, which represents the entire neural network, including its layers and learning rate.
+/// A feedforward neural network composed of sequential layers.
+///
+/// Stores the layer stack, learning rate, and feature normalization statistics
+/// (mean/std from training set) needed for consistent prediction.
 pub struct Network {
     pub layers: Vec<Layer>,
     pub learning_rate: f64,
+    pub feature_mean: Option<ndarray::Array1<f64>>,
+    pub feature_std: Option<ndarray::Array1<f64>>,
 }
 
+/// Builder for constructing a [`Network`] with a fluent API.
+///
+/// Enforces a minimum of 3 layers (2 hidden + 1 output) at build time.
 pub struct NetworkBuilder {
     layers: Vec<Layer>,
     learning_rate: f64,
+    feature_mean: Option<ndarray::Array1<f64>>,
+    feature_std: Option<ndarray::Array1<f64>>,
 }
 
 pub trait AsInput2D<'a> {
@@ -53,6 +63,8 @@ impl Default for NetworkBuilder {
         Self {
             layers: Vec::new(),
             learning_rate: 0.01,
+            feature_mean: None,
+            feature_std: None,
         }
     }
 }
@@ -78,17 +90,19 @@ impl NetworkBuilder {
         Network {
             layers: self.layers,
             learning_rate: self.learning_rate,
+            feature_mean: self.feature_mean,
+            feature_std: self.feature_std,
         }
     }
 }
 
 impl Network {
-    // Constructor for creating a new network with a specified learning rate and an empty list of layers.
+    /// Creates a new [`NetworkBuilder`] with default settings (lr=0.01, no layers).
     pub fn new() -> NetworkBuilder {
         NetworkBuilder::default()
     }
 
-    // Performs the forward pass through the
+    /// Performs a forward pass through all layers, returning the network output.
     pub fn forward<'a, I>(&mut self, input: I) -> Array2<f64>
     where
         I: AsInput2D<'a>,
@@ -100,6 +114,9 @@ impl Network {
         output
     }
 
+    /// Trains the network on the given data for the specified number of epochs.
+    ///
+    /// Returns [`Metrics`] containing final train (and optional validation) scores.
     pub fn fit<'data, IX, IY>(
         &mut self,
         input: IX,
@@ -127,6 +144,7 @@ impl Network {
         )
     }
 
+    /// Trains the network with custom callbacks (e.g., early stopping, progress logging).
     pub fn fit_with_callbacks<'data, IX, IY>(
         &mut self,
         input: IX,
@@ -158,6 +176,7 @@ impl Network {
         )
     }
 
+    /// Runs inference (alias for [`Network::forward`]).
     pub fn predict<'a, I>(&mut self, input: I) -> Array2<f64>
     where
         I: AsInput2D<'a>,
@@ -221,9 +240,24 @@ mod tests {
     #[test]
     fn network_forward_output_shape_is_correct() {
         let mut net = Network::new()
-            .add_layer(Layer::new(4, 8, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(8, 8, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(8, 2, ActivationFunction::Softmax, WeightInitializer::He))
+            .add_layer(Layer::new(
+                4,
+                8,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                8,
+                8,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                8,
+                2,
+                ActivationFunction::Softmax,
+                WeightInitializer::He,
+            ))
             .build();
 
         let input = ndarray::Array2::zeros((5, 4));
@@ -234,9 +268,24 @@ mod tests {
     #[test]
     fn network_predict_matches_forward() {
         let mut net = Network::new()
-            .add_layer(Layer::new(2, 4, ActivationFunction::ReLU, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::ReLU, WeightInitializer::He))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                2,
+                4,
+                ActivationFunction::ReLU,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::ReLU,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build();
 
         let input = ndarray::Array2::from_shape_fn((3, 2), |(i, j)| (i + j) as f64 * 0.1);
@@ -248,9 +297,24 @@ mod tests {
     #[test]
     fn network_learning_rate_builder_sets_field() {
         let net = Network::new()
-            .add_layer(Layer::new(2, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                2,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .learning_rate(0.05)
             .build();
         assert!((net.learning_rate - 0.05).abs() < 1e-12);
@@ -262,9 +326,24 @@ mod tests {
         use ndarray::{Array1, Array2};
 
         let mut net = Network::new()
-            .add_layer(Layer::new(2, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                2,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build();
 
         let x = Array2::from_shape_fn((8, 2), |(i, j)| (i + j) as f64 * 0.1);
@@ -288,9 +367,24 @@ mod tests {
         use ndarray::{Array1, Array2};
 
         let mut net = Network::new()
-            .add_layer(Layer::new(2, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                2,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build();
 
         let x = Array2::from_shape_fn((8, 2), |(i, j)| (i + j) as f64 * 0.1);
