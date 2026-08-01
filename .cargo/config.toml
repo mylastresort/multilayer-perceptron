@@ -1,0 +1,9 @@
+# Build-time environment for every cargo invocation in this project.
+#
+# `yeslogic-fontconfig-sys` (transitively required by the GUI/live-monitor
+# dependencies) needs `fontconfig.pc`. On Debian/Ubuntu it lives in the
+# multiarch pkg-config directory, while `bzip2.pc` (a transitive dep of
+# freetype2) lives in /usr/share/pkgconfig, so both must be on the search
+# path or the build script panics.
+[env]
+PKG_CONFIG_PATH = "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"

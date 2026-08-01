@@ -112,37 +112,41 @@ impl Trainer {
             let mut batch_index = 0usize;
             let mut total_loss = 0.0;
 
-            create_batches(x_train, y_train, &indices, self.batch_size).sum_by(|x_row, y_row| {
-                for callback in callbacks.iter_mut() {
-                    callback.on_batch_begin(batch_index);
-                }
+            create_batches(x_train, y_train, &indices, self.batch_size).sum_by(
+                |x_batch, y_batch| {
+                    for callback in callbacks.iter_mut() {
+                        callback.on_batch_begin(batch_index);
+                    }
 
-                let pred = network.forward(x_row);
-                let batch_loss = self.loss_fn.compute(pred.view(), y_row);
-                let loss_gradient = self.loss_fn.gradient(pred.view(), y_row);
-                let gradients = network.backward(loss_gradient);
-                self.optimizer.update(network, &gradients);
+                    let pred = network.forward(&x_batch);
+                    let batch_size = pred.nrows() as f64;
+                    let batch_loss = self
+                        .loss_fn
+                        .compute(pred.view(), y_batch.view())
+                        .mean()
+                        .unwrap_or(0.0);
+                    let mut upstream_grad = self.loss_fn.gradient(pred.view(), y_batch.view());
+                    upstream_grad /= batch_size;
+                    let gradients = network.backward(upstream_grad);
+                    self.optimizer.update(network, &gradients);
 
-                total_loss += batch_loss;
-                let batch_logs = CallbackLogs {
-                    loss: Some(batch_loss),
-                    val_loss: None,
-                    accuracy: None,
-                    val_accuracy: None,
-                    precision: None,
-                    val_precision: None,
-                    recall: None,
-                    val_recall: None,
-                    f1: None,
-                    val_f1: None,
-                };
-                for callback in callbacks.iter_mut() {
-                    callback.on_batch_end(batch_index, Some(&batch_logs));
-                }
+                    total_loss += batch_loss;
+                    let batch_logs = CallbackLogs {
+                        loss: Some(batch_loss),
+                        val_loss: None,
+                        accuracy: None,
+                        val_accuracy: None,
+                        precision: None,
+                        val_precision: None,
+                    };
+                    for callback in callbacks.iter_mut() {
+                        callback.on_batch_end(batch_index, Some(&batch_logs));
+                    }
 
-                batch_index += 1;
-                batch_loss
-            });
+                    batch_index += 1;
+                    batch_loss
+                },
+            );
 
             metrics.train_loss = if batch_index == 0 {
                 0.0
@@ -155,23 +159,21 @@ impl Trainer {
                 compute_classification_scores_from_labels(train_pred.view(), y_train);
             metrics.train_accuracy = train_scores.accuracy;
             metrics.train_precision = train_scores.precision;
-            metrics.train_recall = train_scores.recall;
-            metrics.train_f1 = train_scores.f1_score;
 
             if let Some((x_val, y_val)) = val_data {
                 let val_pred = network.forward(x_val);
-                metrics.val_loss = self.loss_fn.compute(val_pred.view(), y_val);
+                metrics.val_loss = self
+                    .loss_fn
+                    .compute(val_pred.view(), y_val)
+                    .mean()
+                    .unwrap_or(0.0);
                 let val_scores = compute_classification_scores_from_labels(val_pred.view(), y_val);
                 metrics.val_accuracy = val_scores.accuracy;
                 metrics.val_precision = val_scores.precision;
-                metrics.val_recall = val_scores.recall;
-                metrics.val_f1 = val_scores.f1_score;
             } else {
                 metrics.val_loss = 0.0;
                 metrics.val_accuracy = 0.0;
                 metrics.val_precision = 0.0;
-                metrics.val_recall = 0.0;
-                metrics.val_f1 = 0.0;
             }
 
             let epoch_logs = CallbackLogs {
@@ -181,13 +183,12 @@ impl Trainer {
                 val_accuracy: val_data.map(|_| metrics.val_accuracy),
                 precision: Some(metrics.train_precision),
                 val_precision: val_data.map(|_| metrics.val_precision),
-                recall: Some(metrics.train_recall),
-                val_recall: val_data.map(|_| metrics.val_recall),
-                f1: Some(metrics.train_f1),
-                val_f1: val_data.map(|_| metrics.val_f1),
             };
             for callback in callbacks.iter_mut() {
                 callback.on_epoch_end(epoch, Some(&epoch_logs));
+            }
+            for callback in callbacks.iter_mut() {
+                callback.on_epoch_end_network(epoch, Some(&epoch_logs), network);
             }
 
             if callbacks.iter().any(|callback| callback.should_stop()) {
@@ -205,7 +206,7 @@ impl Trainer {
         }
 
         println!(
-            "{} {} - {} - {} - {}",
+            "{} {} - {}",
             bold(&paint("Training finished", Tone::Success)),
             paint(
                 &format!("accuracy={:.4}", metrics.train_accuracy),
@@ -215,15 +216,10 @@ impl Trainer {
                 &format!("precision={:.4}", metrics.train_precision),
                 Tone::TrainMetric
             ),
-            paint(
-                &format!("recall={:.4}", metrics.train_recall),
-                Tone::TrainMetric
-            ),
-            paint(&format!("f1={:.4}", metrics.train_f1), Tone::TrainMetric)
         );
         if val_data.is_some() {
             println!(
-                "{} {} - {} - {} - {}",
+                "{} {} - {}",
                 paint("Validation:", Tone::Info),
                 paint(
                     &format!("val_accuracy={:.4}", metrics.val_accuracy),
@@ -233,11 +229,6 @@ impl Trainer {
                     &format!("val_precision={:.4}", metrics.val_precision),
                     Tone::ValMetric
                 ),
-                paint(
-                    &format!("val_recall={:.4}", metrics.val_recall),
-                    Tone::ValMetric
-                ),
-                paint(&format!("val_f1={:.4}", metrics.val_f1), Tone::ValMetric)
             );
         }
 

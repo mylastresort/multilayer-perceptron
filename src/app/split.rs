@@ -13,19 +13,21 @@ pub struct SplitArgs {
     pub ratio: f64,
 }
 
-/// Write a `Dataset` slice as CSV (feature columns followed by the label column).
+/// Write a `Dataset` slice as CSV in the same layout `load_dataset` produced it:
+/// the label column first, then the feature columns. This mirrors the input file
+/// layout that `build_dataset` reads back, so the written files round-trip cleanly.
 fn write_csv(dataset: &Dataset, path: &str) -> Result<(), Box<dyn Error>> {
     let mut file = std::fs::File::create(path)?;
 
-    // Header: feature names + "label"
+    // Header: feature names cover every column (label column included first).
     let header: Vec<&str> = dataset.feature_names.iter().map(String::as_str).collect();
-    writeln!(file, "{},label", header.join(","))?;
+    writeln!(file, "{}", header.join(","))?;
 
     for row in 0..dataset.features.nrows() {
         let feature_cols: Vec<String> = (0..dataset.features.ncols())
             .map(|c| dataset.features[[row, c]].to_string())
             .collect();
-        writeln!(file, "{},{}", feature_cols.join(","), dataset.labels[row])?;
+        writeln!(file, "{},{}", dataset.labels[row], feature_cols.join(","))?;
     }
 
     Ok(())
@@ -33,11 +35,7 @@ fn write_csv(dataset: &Dataset, path: &str) -> Result<(), Box<dyn Error>> {
 
 pub fn run_split(args: &SplitArgs) -> Result<(), Box<dyn Error>> {
     if args.ratio <= 0.0 || args.ratio >= 1.0 {
-        return Err(format!(
-            "--ratio must be in (0, 1), got {}",
-            args.ratio
-        )
-        .into());
+        return Err(format!("--ratio must be in (0, 1), got {}", args.ratio).into());
     }
 
     let dataset = build_dataset(&args.dataset_path)?;
@@ -48,7 +46,7 @@ pub fn run_split(args: &SplitArgs) -> Result<(), Box<dyn Error>> {
 
     let train_end = ((args.ratio * n as f64).round() as usize).max(1).min(n - 1);
 
-    use ndarray::{Axis, s};
+    use ndarray::s;
     let train = Dataset {
         features: dataset.features.slice(s![0..train_end, ..]).to_owned(),
         labels: dataset.labels.slice(s![0..train_end]).to_owned(),
@@ -75,7 +73,7 @@ pub fn run_split(args: &SplitArgs) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_split, SplitArgs};
+    use super::{SplitArgs, run_split};
 
     #[test]
     fn run_split_rejects_ratio_of_zero() {
@@ -118,6 +116,28 @@ mod tests {
             ratio: 0.8,
         });
 
+        // Regression check: the written CSVs must have matching header and data
+        // column counts, otherwise loading them back pads columns with nulls and
+        // the feature count no longer matches the trained model.
+        let header_cols = std::fs::read_to_string(&train_path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .split(',')
+            .count();
+        let data_cols = std::fs::read_to_string(&train_path)
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .count();
+        assert_eq!(
+            header_cols, data_cols,
+            "train.csv header/data column mismatch"
+        );
+
         let _ = std::fs::remove_file(&train_path);
         let _ = std::fs::remove_file(&val_path);
 
@@ -141,7 +161,9 @@ mod tests {
             ratio: 0.7,
         });
         let _ = std::fs::remove_file(&csv_path);
-        let Err(e) = result else { panic!("expected error for < 2 rows") };
+        let Err(e) = result else {
+            panic!("expected error for < 2 rows")
+        };
         assert!(e.to_string().contains("at least 2 rows"), "unexpected: {e}");
     }
 }

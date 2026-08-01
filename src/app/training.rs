@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::path::Path;
 
 use mlp::console::{Tone, bold, paint};
 use mlp::data::loader::{Dataset, load_dataset};
@@ -58,6 +59,7 @@ pub fn train_from_dataset(
     network_config: &NetworkConfig,
     gui: bool,
     monitor_options: &MonitorOptions,
+    model_out: Option<&Path>,
 ) -> Result<Network, Box<dyn Error>> {
     // Baseline feature prep mirrors training_learning_curve_test.
     let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
@@ -71,8 +73,8 @@ pub fn train_from_dataset(
         return Err("dataset must contain at least 3 rows to split train/val/test".into());
     }
 
-    let train_end = (0.70 * n as f64).round() as usize;
-    let val_end = (0.85 * n as f64).round() as usize;
+    let train_end = (0.85 * n as f64).round() as usize;
+    let val_end = n;
     if train_end == 0 || val_end <= train_end {
         return Err("dataset split produced empty training or validation set".into());
     }
@@ -83,7 +85,14 @@ pub fn train_from_dataset(
     let y_val = y.slice(s![train_end..val_end]).to_owned();
     let (x_train, x_val) = standardize_from_train(&x_train_raw, &x_val_raw);
 
+    let means = x_train_raw
+        .mean_axis(Axis(0))
+        .expect("training features should not be empty");
+    let stds = x_train_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
+
     let mut network = network_config.build_network();
+    network.feature_mean = Some(means);
+    network.feature_std = Some(stds);
     let epochs = network_config.epochs;
     let batch_size = network_config.batch_size;
 
@@ -99,6 +108,7 @@ pub fn train_from_dataset(
         patience: monitor_options.monitor_patience,
         min_delta: monitor_options.monitor_min_delta,
         start_epoch: monitor_options.monitor_start_epoch,
+        restore_best_weights: true,
     });
     let mut progress_logger = ProgressLogger::new(epochs);
     let mut callbacks: Vec<&mut dyn Callback> = vec![
@@ -114,12 +124,17 @@ pub fn train_from_dataset(
         Some((x_val.view(), y_val.view())),
         batch_size,
         epochs,
-        OptimizerType::from(network_config.optimizer),
+        OptimizerType::for_kind(network_config.optimizer, network_config.weight_decay),
         LossFunction::CategoricalCrossEntropy,
         &mut callbacks,
     );
 
     drop(callbacks);
+
+    // Keras `restore_best_weights`: when early stopping is enabled the weights
+    // are rolled back to the best monitored epoch, so the saved model is the
+    // best one rather than the last epoch's. No-op when early stopping is off.
+    early_stopping.restore_best(&mut network);
 
     println!(
         "{} {} - {} - {} - {}",
@@ -154,24 +169,30 @@ pub fn train_from_dataset(
             Tone::Accent
         )
     );
-    if let Some(best_epoch) = early_stopping.best_epoch() {
+    if let Some(stopped_epoch) = early_stopping.stopped_epoch() {
         println!(
-            "{} {}",
-            paint("Early stopping best epoch:", Tone::Warn),
-            paint(&best_epoch.to_string(), Tone::Warn)
-        );
-    }
-    if early_stopping.stopped() {
-        println!(
-            "{} {}",
-            paint("Early stopping triggered on metric", Tone::Warn),
-            paint(monitor_options.monitor_metric.as_str(), Tone::Warn)
+            "{} {} {}",
+            paint("Early stopping triggered at epoch", Tone::Warn),
+            paint(&(stopped_epoch + 1).to_string(), Tone::Warn),
+            paint(
+                &format!("(monitored: {})", monitor_options.monitor_metric.as_str()),
+                Tone::Warn
+            )
         );
     }
 
     if let Some(path) = &monitor_options.history_out {
         history.save_json(path)?;
         println!("{} {}", paint("Saved metric history:", Tone::Success), path);
+    }
+
+    if let Some(path) = model_out {
+        network.save(path)?;
+        println!(
+            "{} {}",
+            paint("Model saved:", Tone::Success),
+            path.display()
+        );
     }
 
     monitor.keep_open_until_closed();
@@ -185,6 +206,7 @@ mod tests {
     use mlp::data::loader::Dataset;
     use mlp::network::config::NetworkConfig;
     use ndarray::{Array1, Array2};
+    use std::path::Path;
 
     fn data_csv_path() -> String {
         format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"))
@@ -225,7 +247,7 @@ output_layers:
         let path = data_csv_path();
         let dataset = build_dataset(&path).expect("data should load");
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default());
+        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
         assert!(result.is_ok(), "training failed: {:?}", result.err());
     }
 
@@ -239,25 +261,32 @@ output_layers:
             feature_names: Vec::new(),
         };
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default());
-        let Err(e) = result else { panic!("expected Err for < 3 rows") };
+        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
+        let Err(e) = result else {
+            panic!("expected Err for < 3 rows")
+        };
         assert!(e.to_string().contains("at least 3 rows"), "unexpected: {e}");
     }
 
     #[test]
     fn train_from_dataset_rejects_dataset_with_bad_split_ratios() {
-        // n=4: train_end = round(0.70*4=2.8)=3, val_end = round(0.85*4=3.4)=3
+        // n=3: train_end = round(0.85*3=2.55)=3, val_end = 3
         // val_end (3) == train_end (3) → error.
-        let features = Array2::from_shape_fn((4, 31), |(i, j)| (i + j) as f64 * 0.1);
+        let features = Array2::from_shape_fn((3, 31), |(i, j)| (i + j) as f64 * 0.1);
         let dataset = Dataset {
             features,
-            labels: Array1::zeros(4),
+            labels: Array1::zeros(3),
             feature_names: Vec::new(),
         };
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default());
-        let Err(e) = result else { panic!("expected Err for bad split") };
-        assert!(e.to_string().contains("empty training or validation"), "unexpected: {e}");
+        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
+        let Err(e) = result else {
+            panic!("expected Err for bad split")
+        };
+        assert!(
+            e.to_string().contains("empty training or validation"),
+            "unexpected: {e}"
+        );
     }
 
     #[test]
@@ -267,8 +296,7 @@ output_layers:
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let history_path =
-            format!("/tmp/mlp_history_{}_{}.json", std::process::id(), ts);
+        let history_path = format!("/tmp/mlp_history_{}_{}.json", std::process::id(), ts);
 
         let dataset = build_dataset(&data_csv_path()).expect("data should load");
         let config = one_epoch_config();
@@ -276,8 +304,31 @@ output_layers:
             history_out: Some(history_path.clone()),
             ..MonitorOptions::default()
         };
-        let result = train_from_dataset(&dataset, &config, false, &opts);
+        let result = train_from_dataset(&dataset, &config, false, &opts, None);
         let _ = std::fs::remove_file(&history_path);
         assert!(result.is_ok(), "training failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn train_from_dataset_saves_model_when_model_out_is_set() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let model_path = format!("/tmp/mlp_model_{}_{}.json", std::process::id(), ts);
+
+        let dataset = build_dataset(&data_csv_path()).expect("data should load");
+        let config = one_epoch_config();
+        let result = train_from_dataset(
+            &dataset,
+            &config,
+            false,
+            &MonitorOptions::default(),
+            Some(Path::new(&model_path)),
+        );
+        let saved = result.is_ok() && Path::new(&model_path).exists();
+        let _ = std::fs::remove_file(&model_path);
+        assert!(saved, "model should have been saved before the GUI blocks");
     }
 }

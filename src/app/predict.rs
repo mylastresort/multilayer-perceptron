@@ -26,17 +26,24 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
         return Err("prediction dataset has no rows".into());
     }
 
-    // Standardise using the dataset's own mean/std (inference-only; no training split needed).
-    let means = x_raw
-        .mean_axis(Axis(0))
-        .expect("features should not be empty");
-    let stds = x_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
-    let x = (x_raw - &means) / &stds;
+    // Standardise using the training statistics stored in the model.
+    let x = if let (Some(mean), Some(std)) = (&network.feature_mean, &network.feature_std) {
+        (&x_raw - mean) / std
+    } else {
+        let means = x_raw
+            .mean_axis(Axis(0))
+            .expect("features should not be empty");
+        let stds = x_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
+        (&x_raw - &means) / &stds
+    };
 
     let predictions: Array2<f64> = network.predict(&x);
 
-    // Evaluate with binary cross-entropy.
-    let loss = LossFunction::BinaryCrossEntropy.compute(predictions.view(), y.view());
+    // Evaluate with binary cross-entropy (mean over the samples).
+    let loss = LossFunction::BinaryCrossEntropy
+        .compute(predictions.view(), y.view())
+        .mean()
+        .expect("prediction dataset has at least one row");
 
     // Compute accuracy: pick the column with the higher predicted probability.
     let n = predictions.nrows();
@@ -69,11 +76,9 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_predict, PredictArgs};
+    use super::{PredictArgs, run_predict};
     use mlp::network::{
-        activation::ActivationFunction,
-        initializer::WeightInitializer,
-        layer::Layer,
+        activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
         model::Network,
     };
 
@@ -102,13 +107,31 @@ mod tests {
         let model_path = format!("/tmp/mlp_pred_empty_{}_{}.json", std::process::id(), ts);
         let network = Network::new()
             .learning_rate(0.01)
-            .add_layer(Layer::new(1, 2, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(2, 2, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(2, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                1,
+                2,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                2,
+                2,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                2,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build();
         network.save(&model_path).expect("model should save");
 
-        let result = run_predict(&PredictArgs { dataset_path: csv_path.clone(), model_path: model_path.clone() });
+        let result = run_predict(&PredictArgs {
+            dataset_path: csv_path.clone(),
+            model_path: model_path.clone(),
+        });
         let _ = std::fs::remove_file(&csv_path);
         let _ = std::fs::remove_file(&model_path);
         // Should error because dataset has 0 rows.
@@ -128,13 +151,31 @@ mod tests {
         // Single-output Sigmoid network: predictions.ncols() == 1 → exercises line 46.
         let network = Network::new()
             .learning_rate(0.01)
-            .add_layer(Layer::new(30, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                30,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build();
         network.save(&model_path).expect("model should save");
 
-        let result = run_predict(&PredictArgs { dataset_path, model_path: model_path.clone() });
+        let result = run_predict(&PredictArgs {
+            dataset_path,
+            model_path: model_path.clone(),
+        });
         let _ = std::fs::remove_file(&model_path);
         assert!(result.is_ok(), "run_predict failed: {:?}", result.err());
     }
@@ -153,13 +194,31 @@ mod tests {
         // (lines 48-55) where accuracy is computed via argmax.
         let network = Network::new()
             .learning_rate(0.01)
-            .add_layer(Layer::new(30, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 2, ActivationFunction::Softmax, WeightInitializer::He))
+            .add_layer(Layer::new(
+                30,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                2,
+                ActivationFunction::Softmax,
+                WeightInitializer::He,
+            ))
             .build();
         network.save(&model_path).expect("model should save");
 
-        let result = run_predict(&PredictArgs { dataset_path, model_path: model_path.clone() });
+        let result = run_predict(&PredictArgs {
+            dataset_path,
+            model_path: model_path.clone(),
+        });
         let _ = std::fs::remove_file(&model_path);
         assert!(result.is_ok(), "run_predict failed: {:?}", result.err());
     }

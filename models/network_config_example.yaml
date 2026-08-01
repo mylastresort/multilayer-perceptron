@@ -31,8 +31,6 @@ monitor_metrics:
   - loss
   - accuracy
   - precision
-  - recall
-  - f1
 # monitor_metrics:
 #   - loss
 #   - accuracy # Optional default set
@@ -52,7 +50,8 @@ monitor_min_delta: 0.0001
 monitor_start_epoch: 5
 # monitor_start_epoch: 0 # Optional default
 
-# monitor_early_stopping: true # Optional CLI flag: --monitor-early-stopping
+# Early stopping is ON by default. Disable with --no-early-stopping.
+# monitor_early_stopping: true
 # monitor_history_out: reports/history.json # Optional CLI arg: --monitor-history-out
 # gui: true # Optional CLI flag: --gui
 

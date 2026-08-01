@@ -50,7 +50,11 @@ fn save_load_roundtrip_preserves_weights() {
     net.save(&path).expect("save should succeed");
     let loaded = Network::load(&path).expect("load should succeed");
 
-    assert_eq!(net.layers.len(), loaded.layers.len(), "layer count must match");
+    assert_eq!(
+        net.layers.len(),
+        loaded.layers.len(),
+        "layer count must match"
+    );
 
     for (i, (orig, rest)) in net.layers.iter().zip(loaded.layers.iter()).enumerate() {
         assert_eq!(
@@ -85,7 +89,11 @@ fn save_load_roundtrip_preserves_learning_rate() {
     let loaded = Network::load(&path).expect("load should succeed");
 
     let diff = (loaded.learning_rate - 0.03141).abs();
-    assert!(diff < 1e-12, "learning rate mismatch: {}", loaded.learning_rate);
+    assert!(
+        diff < 1e-12,
+        "learning rate mismatch: {}",
+        loaded.learning_rate
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -100,9 +108,7 @@ fn loaded_model_produces_identical_predictions() {
 
     let input = Array2::from_shape_vec(
         (3, 4),
-        vec![
-            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2,
-        ],
+        vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
     )
     .unwrap();
 

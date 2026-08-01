@@ -35,6 +35,10 @@ struct SavedLayer {
 struct SavedNetwork {
     learning_rate: f64,
     layers: Vec<SavedLayer>,
+    #[serde(default)]
+    feature_mean: Option<Vec<f64>>,
+    #[serde(default)]
+    feature_std: Option<Vec<f64>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -43,11 +47,7 @@ struct SavedNetwork {
 
 impl From<&Layer> for SavedLayer {
     fn from(layer: &Layer) -> Self {
-        let weights: Vec<Vec<f64>> = layer
-            .weights
-            .outer_iter()
-            .map(|row| row.to_vec())
-            .collect();
+        let weights: Vec<Vec<f64>> = layer.weights.outer_iter().map(|row| row.to_vec()).collect();
         Self {
             weights,
             bias: layer.bias.to_vec(),
@@ -97,6 +97,8 @@ impl Network {
         let saved = SavedNetwork {
             learning_rate: self.learning_rate,
             layers: self.layers.iter().map(SavedLayer::from).collect(),
+            feature_mean: self.feature_mean.as_ref().map(|m| m.to_vec()),
+            feature_std: self.feature_std.as_ref().map(|s| s.to_vec()),
         };
         let json = serde_json::to_string_pretty(&saved)?;
         fs::write(path, json)?;
@@ -121,9 +123,20 @@ impl Network {
             layers.push(Layer::try_from(sl)?);
         }
 
+        let feature_mean = saved.feature_mean.map(|v| {
+            use ndarray::Array1;
+            Array1::from_vec(v)
+        });
+        let feature_std = saved.feature_std.map(|v| {
+            use ndarray::Array1;
+            Array1::from_vec(v)
+        });
+
         Ok(Network {
             layers,
             learning_rate: saved.learning_rate,
+            feature_mean,
+            feature_std,
         })
     }
 }
@@ -137,9 +150,24 @@ mod tests {
 
     fn three_layer_net() -> Network {
         Network::new()
-            .add_layer(Layer::new(2, 4, ActivationFunction::Sigmoid, WeightInitializer::He))
-            .add_layer(Layer::new(4, 4, ActivationFunction::Tanh, WeightInitializer::Xavier))
-            .add_layer(Layer::new(4, 1, ActivationFunction::Sigmoid, WeightInitializer::He))
+            .add_layer(Layer::new(
+                2,
+                4,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
+            .add_layer(Layer::new(
+                4,
+                4,
+                ActivationFunction::Tanh,
+                WeightInitializer::Xavier,
+            ))
+            .add_layer(Layer::new(
+                4,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::He,
+            ))
             .build()
     }
 
@@ -151,10 +179,8 @@ mod tests {
 
     #[test]
     fn load_invalid_json_returns_error() {
-        let path = std::env::temp_dir().join(format!(
-            "mlp_invalid_json_{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mlp_invalid_json_{}.json", std::process::id()));
         std::fs::write(&path, "not valid json {{").unwrap();
         let result = Network::load(&path);
         let _ = std::fs::remove_file(&path);
@@ -181,10 +207,7 @@ mod tests {
         })
         .to_string();
 
-        let path = std::env::temp_dir().join(format!(
-            "mlp_two_layers_{}.json",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("mlp_two_layers_{}.json", std::process::id()));
         std::fs::write(&path, json).unwrap();
         let result = Network::load(&path);
         let _ = std::fs::remove_file(&path);
@@ -203,10 +226,8 @@ mod tests {
         })
         .to_string();
 
-        let path = std::env::temp_dir().join(format!(
-            "mlp_empty_weights_{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mlp_empty_weights_{}.json", std::process::id()));
         std::fs::write(&path, json).unwrap();
         let result = Network::load(&path);
         let _ = std::fs::remove_file(&path);
@@ -238,10 +259,8 @@ mod tests {
         })
         .to_string();
 
-        let path = std::env::temp_dir().join(format!(
-            "mlp_bias_mismatch_{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mlp_bias_mismatch_{}.json", std::process::id()));
         std::fs::write(&path, json).unwrap();
         let result = Network::load(&path);
         let _ = std::fs::remove_file(&path);
@@ -254,10 +273,8 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip_three_layer_net() {
         let net = three_layer_net();
-        let path = std::env::temp_dir().join(format!(
-            "mlp_persist_unit_{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mlp_persist_unit_{}.json", std::process::id()));
         net.save(&path).unwrap();
         let loaded = Network::load(&path).unwrap();
         let _ = std::fs::remove_file(&path);

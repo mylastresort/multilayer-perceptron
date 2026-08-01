@@ -158,12 +158,12 @@ pub fn print_loaded_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{activation_label, group_label, initializer_label, print_loaded_config,
-                print_loaded_dataset, print_verbose_config};
+    use super::{
+        activation_label, group_label, initializer_label, print_loaded_config,
+        print_loaded_dataset, print_verbose_config,
+    };
     use mlp::network::{
-        activation::ActivationFunction,
-        config::LayerGroup,
-        initializer::WeightInitializer,
+        activation::ActivationFunction, config::LayerGroup, initializer::WeightInitializer,
     };
 
     fn minimal_config() -> mlp::network::config::NetworkConfig {

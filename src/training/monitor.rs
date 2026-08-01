@@ -1,16 +1,17 @@
 use std::{error::Error, fs};
 
+use ndarray::{Array1, Array2};
 use serde::Serialize;
 
 use crate::network::callbacks::{Callback, CallbackLogs};
+use crate::network::model::Network;
 
+/// Metrics that can be monitored for early stopping or history tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MonitoredMetric {
     Loss,
     Accuracy,
     Precision,
-    Recall,
-    F1,
 }
 
 impl MonitoredMetric {
@@ -19,8 +20,6 @@ impl MonitoredMetric {
             "loss" => Some(Self::Loss),
             "accuracy" | "acc" => Some(Self::Accuracy),
             "precision" => Some(Self::Precision),
-            "recall" => Some(Self::Recall),
-            "f1" | "f1_score" => Some(Self::F1),
             _ => None,
         }
     }
@@ -30,8 +29,6 @@ impl MonitoredMetric {
             Self::Loss => "loss",
             Self::Accuracy => "accuracy",
             Self::Precision => "precision",
-            Self::Recall => "recall",
-            Self::F1 => "f1",
         }
     }
 
@@ -40,8 +37,6 @@ impl MonitoredMetric {
             Self::Loss => logs.loss,
             Self::Accuracy => logs.accuracy,
             Self::Precision => logs.precision,
-            Self::Recall => logs.recall,
-            Self::F1 => logs.f1,
         }
     }
 
@@ -50,8 +45,6 @@ impl MonitoredMetric {
             Self::Loss => logs.val_loss,
             Self::Accuracy => logs.val_accuracy,
             Self::Precision => logs.val_precision,
-            Self::Recall => logs.val_recall,
-            Self::F1 => logs.val_f1,
         }
     }
 }
@@ -99,10 +92,6 @@ pub struct EpochHistoryEntry {
     pub val_accuracy: Option<f64>,
     pub precision: Option<f64>,
     pub val_precision: Option<f64>,
-    pub recall: Option<f64>,
-    pub val_recall: Option<f64>,
-    pub f1: Option<f64>,
-    pub val_f1: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -146,14 +135,11 @@ impl Callback for HistoryCallback {
             val_accuracy: logs.val_accuracy,
             precision: logs.precision,
             val_precision: logs.val_precision,
-            recall: logs.recall,
-            val_recall: logs.val_recall,
-            f1: logs.f1,
-            val_f1: logs.val_f1,
         });
     }
 }
 
+/// Shared metric-monitoring config for early stopping.
 #[derive(Debug, Clone)]
 pub struct EarlyStoppingConfig {
     pub enabled: bool,
@@ -162,6 +148,7 @@ pub struct EarlyStoppingConfig {
     pub patience: usize,
     pub min_delta: f64,
     pub start_epoch: usize,
+    pub restore_best_weights: bool,
 }
 
 impl Default for EarlyStoppingConfig {
@@ -173,15 +160,25 @@ impl Default for EarlyStoppingConfig {
             patience: 10,
             min_delta: 0.0,
             start_epoch: 0,
+            restore_best_weights: true,
         }
     }
 }
 
+/// Keras `EarlyStopping`-style callback.
+///
+/// Mirrors `tf.keras.callbacks.EarlyStopping`: when `enabled` it watches the
+/// monitored metric, stops training once it has not improved for `patience`
+/// consecutive epochs, and (when `restore_best_weights`) restores the best-epoch
+/// weights at the end of training. When `enabled` is false the callback is
+/// inert — exactly like omitting it from the callbacks list.
 pub struct EarlyStoppingCallback {
     cfg: EarlyStoppingConfig,
     best_value: Option<f64>,
-    best_epoch: Option<usize>,
+    best_weights: Option<Vec<(Array2<f64>, Array1<f64>)>>,
+    improved_this_epoch: bool,
     wait: usize,
+    stopped_epoch: Option<usize>,
     stop: bool,
 }
 
@@ -190,8 +187,10 @@ impl EarlyStoppingCallback {
         Self {
             cfg,
             best_value: None,
-            best_epoch: None,
+            best_weights: None,
+            improved_this_epoch: false,
             wait: 0,
+            stopped_epoch: None,
             stop: false,
         }
     }
@@ -200,8 +199,23 @@ impl EarlyStoppingCallback {
         self.stop
     }
 
-    pub fn best_epoch(&self) -> Option<usize> {
-        self.best_epoch
+    /// The epoch (0-based) at which early stopping fired, if it did.
+    pub fn stopped_epoch(&self) -> Option<usize> {
+        self.stopped_epoch
+    }
+
+    /// Restores the best-epoch weights (Keras `restore_best_weights`). A no-op
+    /// unless the callback is enabled and `restore_best_weights` is set.
+    pub fn restore_best(&self, network: &mut Network) {
+        if !self.cfg.enabled || !self.cfg.restore_best_weights {
+            return;
+        }
+        if let Some(best) = &self.best_weights {
+            for (layer, (w, b)) in network.layers.iter_mut().zip(best.iter()) {
+                layer.weights = w.clone();
+                layer.bias = b.clone();
+            }
+        }
     }
 
     fn improved(&self, current: f64, best: f64) -> bool {
@@ -214,7 +228,10 @@ impl EarlyStoppingCallback {
 
 impl Callback for EarlyStoppingCallback {
     fn on_epoch_end(&mut self, epoch: usize, logs: Option<&CallbackLogs>) {
-        if !self.cfg.enabled || epoch < self.cfg.start_epoch {
+        if !self.cfg.enabled {
+            return;
+        }
+        if epoch < self.cfg.start_epoch {
             return;
         }
 
@@ -231,23 +248,62 @@ impl Callback for EarlyStoppingCallback {
             return;
         };
 
+        // Keras: `wait` counts consecutive epochs without improvement.
+        self.wait += 1;
         match self.best_value {
             None => {
                 self.best_value = Some(current);
-                self.best_epoch = Some(epoch);
+                self.improved_this_epoch = true;
                 self.wait = 0;
             }
             Some(best) if self.improved(current, best) => {
                 self.best_value = Some(current);
-                self.best_epoch = Some(epoch);
+                self.improved_this_epoch = true;
                 self.wait = 0;
             }
             Some(_) => {
-                self.wait += 1;
-                if self.wait > self.cfg.patience {
-                    self.stop = true;
-                }
+                self.improved_this_epoch = false;
             }
+        }
+
+        if self.wait >= self.cfg.patience {
+            self.stopped_epoch = Some(epoch);
+            self.stop = true;
+        }
+    }
+
+    fn on_epoch_end_network(
+        &mut self,
+        epoch: usize,
+        logs: Option<&CallbackLogs>,
+        network: &mut Network,
+    ) {
+        if !self.cfg.enabled || epoch < self.cfg.start_epoch || logs.is_none() {
+            return;
+        }
+        if !self.cfg.restore_best_weights {
+            return;
+        }
+
+        if self.improved_this_epoch {
+            self.best_weights = Some(
+                network
+                    .layers
+                    .iter()
+                    .map(|l| (l.weights.clone(), l.bias.clone()))
+                    .collect(),
+            );
+            self.improved_this_epoch = false;
+        } else if self.best_weights.is_none() && self.best_value.is_some() {
+            // Keras: keep the first monitored epoch's weights so there is always
+            // something to restore even if the metric never improves again.
+            self.best_weights = Some(
+                network
+                    .layers
+                    .iter()
+                    .map(|l| (l.weights.clone(), l.bias.clone()))
+                    .collect(),
+            );
         }
     }
 
@@ -279,15 +335,6 @@ mod tests {
         assert_eq!(
             MonitoredMetric::parse("precision"),
             Some(MonitoredMetric::Precision)
-        );
-        assert_eq!(
-            MonitoredMetric::parse("recall"),
-            Some(MonitoredMetric::Recall)
-        );
-        assert_eq!(MonitoredMetric::parse("f1"), Some(MonitoredMetric::F1));
-        assert_eq!(
-            MonitoredMetric::parse("f1_score"),
-            Some(MonitoredMetric::F1)
         );
     }
 
@@ -324,8 +371,6 @@ mod tests {
             MonitoredMetric::Loss,
             MonitoredMetric::Accuracy,
             MonitoredMetric::Precision,
-            MonitoredMetric::Recall,
-            MonitoredMetric::F1,
         ];
         for v in variants {
             let s = v.as_str();
@@ -346,15 +391,11 @@ mod tests {
             loss: Some(0.5),
             accuracy: Some(0.8),
             precision: Some(0.7),
-            recall: Some(0.6),
-            f1: Some(0.65),
             ..CallbackLogs::default()
         };
         assert_eq!(MonitoredMetric::Loss.train_value(&logs), Some(0.5));
         assert_eq!(MonitoredMetric::Accuracy.train_value(&logs), Some(0.8));
         assert_eq!(MonitoredMetric::Precision.train_value(&logs), Some(0.7));
-        assert_eq!(MonitoredMetric::Recall.train_value(&logs), Some(0.6));
-        assert_eq!(MonitoredMetric::F1.train_value(&logs), Some(0.65));
     }
 
     #[test]
@@ -363,15 +404,11 @@ mod tests {
             val_loss: Some(0.4),
             val_accuracy: Some(0.9),
             val_precision: Some(0.85),
-            val_recall: Some(0.75),
-            val_f1: Some(0.80),
             ..CallbackLogs::default()
         };
         assert_eq!(MonitoredMetric::Loss.val_value(&logs), Some(0.4));
         assert_eq!(MonitoredMetric::Accuracy.val_value(&logs), Some(0.9));
         assert_eq!(MonitoredMetric::Precision.val_value(&logs), Some(0.85));
-        assert_eq!(MonitoredMetric::Recall.val_value(&logs), Some(0.75));
-        assert_eq!(MonitoredMetric::F1.val_value(&logs), Some(0.80));
     }
 
     // -----------------------------------------------------------------------
@@ -478,7 +515,34 @@ mod tests {
             patience,
             min_delta: 0.0,
             start_epoch: 0,
+            restore_best_weights: true,
         }
+    }
+
+    fn test_network() -> crate::network::model::Network {
+        use crate::network::{
+            activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
+        };
+        Network::new()
+            .add_layer(Layer::new(
+                2,
+                3,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::Xavier,
+            ))
+            .add_layer(Layer::new(
+                3,
+                2,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::Xavier,
+            ))
+            .add_layer(Layer::new(
+                2,
+                1,
+                ActivationFunction::Sigmoid,
+                WeightInitializer::Xavier,
+            ))
+            .build()
     }
 
     fn loss_logs(loss: f64) -> CallbackLogs {
@@ -500,14 +564,15 @@ mod tests {
     }
 
     #[test]
-    fn early_stopping_stops_after_patience_exceeded() {
+    fn early_stopping_stops_after_patience_consecutive_epochs() {
         let mut cb = EarlyStoppingCallback::new(make_cfg(MonitorMode::Min, 2));
         // epoch 0: best = 1.0
         cb.on_epoch_end(0, Some(&loss_logs(1.0)));
-        // epochs 1..=3: no improvement (wait goes 1, 2, 3 > patience=2 → stop)
+        // epoch 1: no improvement, wait = 1 (below patience → not stopped)
         cb.on_epoch_end(1, Some(&loss_logs(1.0)));
+        assert!(!cb.stopped());
+        // epoch 2: no improvement, wait = 2 >= patience=2 → stopped
         cb.on_epoch_end(2, Some(&loss_logs(1.0)));
-        cb.on_epoch_end(3, Some(&loss_logs(1.0)));
         assert!(cb.stopped());
     }
 
@@ -551,12 +616,105 @@ mod tests {
     }
 
     #[test]
-    fn early_stopping_best_epoch_tracks_best() {
-        let mut cb = EarlyStoppingCallback::new(make_cfg(MonitorMode::Min, 5));
+    fn early_stopping_records_stopped_epoch() {
+        let mut cb = EarlyStoppingCallback::new(make_cfg(MonitorMode::Min, 2));
         cb.on_epoch_end(0, Some(&loss_logs(1.0)));
-        cb.on_epoch_end(1, Some(&loss_logs(0.5)));
-        cb.on_epoch_end(2, Some(&loss_logs(0.8)));
-        assert_eq!(cb.best_epoch(), Some(1));
+        cb.on_epoch_end(1, Some(&loss_logs(1.0)));
+        assert_eq!(cb.stopped_epoch(), None);
+        cb.on_epoch_end(2, Some(&loss_logs(1.0)));
+        assert_eq!(cb.stopped_epoch(), Some(2));
+    }
+
+    #[test]
+    fn early_stopping_restores_best_weights() {
+        let mut net = test_network();
+
+        let mut cb = EarlyStoppingCallback::new(make_cfg(MonitorMode::Min, 1));
+
+        // epoch 0 improves → snapshot the best weights.
+        cb.on_epoch_end(0, Some(&loss_logs(1.0)));
+        cb.on_epoch_end_network(0, Some(&loss_logs(1.0)), &mut net);
+        let best: Vec<Array2<f64>> = net.layers.iter().map(|l| l.weights.clone()).collect();
+
+        // epoch 1 worsens → no new snapshot; patience 1 reached → stop.
+        cb.on_epoch_end(1, Some(&loss_logs(2.0)));
+        cb.on_epoch_end_network(1, Some(&loss_logs(2.0)), &mut net);
+        assert!(cb.stopped());
+        assert_eq!(cb.stopped_epoch(), Some(1));
+
+        // Perturb the weights, then restore the best snapshot.
+        for layer in net.layers.iter_mut() {
+            layer.weights = layer.weights.clone() + 100.0;
+        }
+        cb.restore_best(&mut net);
+
+        for (i, layer) in net.layers.iter().enumerate() {
+            for ((r, c), v) in layer.weights.indexed_iter() {
+                assert!(
+                    (v - best[i][[r, c]]).abs() < 1e-12,
+                    "layer {i} weights not restored at ({r},{c})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn early_stopping_disabled_is_fully_inert() {
+        let mut net = test_network();
+        let original: Vec<Array2<f64>> = net.layers.iter().map(|l| l.weights.clone()).collect();
+
+        let mut cfg = make_cfg(MonitorMode::Min, 1);
+        cfg.enabled = false;
+        let mut cb = EarlyStoppingCallback::new(cfg);
+
+        for epoch in 0..5 {
+            let l = 1.0 - epoch as f64 * 0.1;
+            cb.on_epoch_end(epoch, Some(&loss_logs(l)));
+            cb.on_epoch_end_network(epoch, Some(&loss_logs(l)), &mut net);
+        }
+
+        assert!(!cb.stopped());
+        assert_eq!(cb.stopped_epoch(), None);
+
+        // No best weights were tracked, so restore_best is a no-op.
+        for layer in net.layers.iter_mut() {
+            layer.weights = layer.weights.clone() + 100.0;
+        }
+        cb.restore_best(&mut net);
+        for (i, layer) in net.layers.iter().enumerate() {
+            for ((r, c), v) in layer.weights.indexed_iter() {
+                assert!(
+                    (v - (original[i][[r, c]] + 100.0)).abs() < 1e-12,
+                    "restore_best mutated weights while disabled at ({r},{c})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn early_stopping_does_not_restore_when_restore_best_weights_false() {
+        let mut net = test_network();
+        let original: Vec<Array2<f64>> = net.layers.iter().map(|l| l.weights.clone()).collect();
+
+        let mut cfg = make_cfg(MonitorMode::Min, 5);
+        cfg.restore_best_weights = false;
+        let mut cb = EarlyStoppingCallback::new(cfg);
+
+        cb.on_epoch_end(0, Some(&loss_logs(1.0)));
+        cb.on_epoch_end_network(0, Some(&loss_logs(1.0)), &mut net);
+
+        for layer in net.layers.iter_mut() {
+            layer.weights = layer.weights.clone() + 100.0;
+        }
+        cb.restore_best(&mut net);
+        for (i, layer) in net.layers.iter().enumerate() {
+            for ((r, c), v) in layer.weights.indexed_iter() {
+                assert!(
+                    (v - (original[i][[r, c]] + 100.0)).abs() < 1e-12,
+                    "restore_best ran despite restore_best_weights=false at ({r},{c})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -564,6 +722,7 @@ mod tests {
         let mut cb = EarlyStoppingCallback::new(make_cfg(MonitorMode::Min, 1));
         cb.on_epoch_end(0, None);
         assert!(!cb.stopped());
+        assert_eq!(cb.stopped_epoch(), None);
     }
 
     #[test]
@@ -579,6 +738,6 @@ mod tests {
         cb.on_epoch_end(0, Some(&logs));
         // The callback should not have started tracking (returned early before best_value set).
         assert!(!cb.stopped());
-        assert!(cb.best_epoch().is_none());
+        assert_eq!(cb.stopped_epoch(), None);
     }
 }

@@ -43,19 +43,19 @@ impl Layer {
     }
 
     // Performs the backward pass through the layer, calculating gradients for weights, bias, and input.
-    pub fn backward(&self, _grad_output: &Array2<f64>) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
+    pub fn backward(&self, upstream: &Array2<f64>) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
         let weighted_sum = self
             .weighted_sum_cache
             .as_ref()
             .expect("No forward pass cache");
         let input = self.input_cache.as_ref().expect("No forward pass cache");
 
-        let d_a = self.activation.backward(weighted_sum, _grad_output);
-        let d_z = input.t().dot(&d_a);
-        let dw = d_a.sum_axis(ndarray::Axis(0));
-        let db = d_a.dot(&self.weights.t());
+        let delta = self.activation.backward(weighted_sum, upstream);
+        let g_input = delta.dot(&self.weights.t());
+        let g_weights = input.t().dot(&delta);
+        let g_bias = delta.sum_axis(ndarray::Axis(0));
 
-        (db, d_z, dw)
+        (g_input, g_weights, g_bias)
     }
 }
 
@@ -107,9 +107,9 @@ mod tests {
         let _ = layer.forward(input.view()); // populate cache
         let grad_output = arr2(&[[0.1, 0.2, 0.3]]);
         let (grad_input, grad_weights, grad_bias) = layer.backward(&grad_output);
-        assert_eq!(grad_input.dim(), (1, 2));   // same as input
+        assert_eq!(grad_input.dim(), (1, 2)); // same as input
         assert_eq!(grad_weights.dim(), (2, 3)); // same as weights
-        assert_eq!(grad_bias.len(), 3);          // same as bias
+        assert_eq!(grad_bias.len(), 3); // same as bias
     }
 
     #[test]

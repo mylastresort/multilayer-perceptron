@@ -74,12 +74,8 @@ impl LiveTrainingMonitorCallback {
             })
             .collect();
 
-        let live_window = maybe_open_live_window(
-            config.enabled,
-            config.width,
-            config.height,
-            config.delay_ms,
-        );
+        let live_window =
+            maybe_open_live_window(config.enabled, config.width, config.height, config.delay_ms);
 
         Self {
             series,
@@ -225,7 +221,10 @@ impl LiveMonitorWindow {
         }
     }
 
-    fn draw_metric_panel(area: &DrawingArea<BitMapBackend<'_>, Shift>, metric_series: &MetricSeries) {
+    fn draw_metric_panel(
+        area: &DrawingArea<BitMapBackend<'_>, Shift>,
+        metric_series: &MetricSeries,
+    ) {
         let points = metric_series.train_values.len();
         if points == 0 {
             return;
@@ -243,13 +242,13 @@ impl LiveMonitorWindow {
             .map(|(min_v, max_v)| {
                 if matches!(
                     metric_series.metric,
-                    MonitoredMetric::Accuracy
-                        | MonitoredMetric::Precision
-                        | MonitoredMetric::Recall
-                        | MonitoredMetric::F1
+                    MonitoredMetric::Accuracy | MonitoredMetric::Precision
                 ) {
                     let spread = (max_v - min_v).max(1e-9);
-                    ((min_v - 0.1 * spread).max(0.0), (max_v + 0.1 * spread).min(1.0))
+                    (
+                        (min_v - 0.1 * spread).max(0.0),
+                        (max_v + 0.1 * spread).min(1.0),
+                    )
                 } else {
                     let spread = (max_v - min_v).max(1e-9);
                     (min_v - 0.1 * spread, max_v + 0.1 * spread)
@@ -303,7 +302,10 @@ impl LiveMonitorWindow {
                 ))
                 .map(|series| {
                     series.label("val").legend(|(x, y)| {
-                        PathElement::new(vec![(x, y), (x + 16, y)], VALIDATION_COLOR.stroke_width(3))
+                        PathElement::new(
+                            vec![(x, y), (x + 16, y)],
+                            VALIDATION_COLOR.stroke_width(3),
+                        )
                     });
                 });
 

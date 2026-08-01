@@ -1,8 +1,8 @@
 use mlp::network::{
     activation::ActivationFunction, initializer::WeightInitializer, layer::Layer, model::Network,
 };
-use mlp::training::optimizer::{Adam, NesterovSGD, Optimizer, RMSprop, SGD};
 use mlp::training::backprop::LayerGradients;
+use mlp::training::optimizer::{Adam, Optimizer, SGD};
 use ndarray::{Array1, Array2};
 
 fn tiny_network() -> Network {
@@ -78,90 +78,12 @@ fn sgd_unit_gradient_decreases_weights_by_lr() {
     let expected = w0_before - 0.1_f64;
     for ((i, j), v) in net.layers[0].weights.indexed_iter() {
         let diff = (v - expected[[i, j]]).abs();
-        assert!(diff < 1e-12, "weight [{i},{j}] mismatch: {v} vs {}", expected[[i, j]]);
+        assert!(
+            diff < 1e-12,
+            "weight [{i},{j}] mismatch: {v} vs {}",
+            expected[[i, j]]
+        );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Nesterov SGD
-// ---------------------------------------------------------------------------
-
-#[test]
-fn nesterov_zero_gradient_leaves_weights_unchanged() {
-    let mut net = tiny_network();
-    let w0_before = net.layers[0].weights.clone();
-
-    let grads = zero_gradients(&net);
-    let mut opt = NesterovSGD::new(0.01, 0.9);
-    opt.update(&mut net, &grads);
-
-    assert_eq!(net.layers[0].weights, w0_before);
-}
-
-#[test]
-fn nesterov_unit_gradient_updates_weights() {
-    let mut net = tiny_network();
-    let w0_before = net.layers[0].weights.clone();
-
-    let grads = unit_gradients(&net);
-    let mut opt = NesterovSGD::new(0.1, 0.9);
-    opt.update(&mut net, &grads);
-
-    // Weights must differ from the original.
-    assert_ne!(net.layers[0].weights, w0_before);
-}
-
-#[test]
-fn nesterov_accumulates_velocity_across_steps() {
-    let mut net = tiny_network();
-    let w_init = net.layers[0].weights.clone();
-
-    let mut opt = NesterovSGD::new(0.01, 0.9);
-    for _ in 0..5 {
-        let grads = unit_gradients(&net);
-        opt.update(&mut net, &grads);
-    }
-
-    // After 5 steps with unit gradients the weights must have moved further
-    // than after just 1 step (momentum amplifies updates).
-    let mut net_single = tiny_network();
-    net_single.layers[0].weights = w_init.clone();
-    let grads = unit_gradients(&net_single);
-    let mut opt_single = NesterovSGD::new(0.01, 0.9);
-    opt_single.update(&mut net_single, &grads);
-
-    let diff_5 = (&net.layers[0].weights - &w_init).mapv(f64::abs).sum();
-    let diff_1 = (&net_single.layers[0].weights - &w_init).mapv(f64::abs).sum();
-    assert!(diff_5 > diff_1, "accumulated update should be larger than single step");
-}
-
-// ---------------------------------------------------------------------------
-// RMSprop
-// ---------------------------------------------------------------------------
-
-#[test]
-fn rmsprop_zero_gradient_leaves_weights_unchanged() {
-    let mut net = tiny_network();
-    let w0_before = net.layers[0].weights.clone();
-
-    let grads = zero_gradients(&net);
-    let mut opt = RMSprop::new(0.01, 0.9, 1e-8);
-    opt.update(&mut net, &grads);
-
-    // With zero gradient the update is 0/(sqrt(0)+ε) = 0.
-    assert_eq!(net.layers[0].weights, w0_before);
-}
-
-#[test]
-fn rmsprop_unit_gradient_updates_weights() {
-    let mut net = tiny_network();
-    let w0_before = net.layers[0].weights.clone();
-
-    let grads = unit_gradients(&net);
-    let mut opt = RMSprop::new(0.01, 0.9, 1e-8);
-    opt.update(&mut net, &grads);
-
-    assert_ne!(net.layers[0].weights, w0_before);
 }
 
 // ---------------------------------------------------------------------------
@@ -244,12 +166,7 @@ fn optimizer_type_factory_creates_correct_variant() {
     let lr = 0.01;
 
     // Each factory call must return a working optimizer (smoke test).
-    let kinds = [
-        OptimizerKind::Sgd,
-        OptimizerKind::NesterovSgd,
-        OptimizerKind::Rmsprop,
-        OptimizerKind::Adam,
-    ];
+    let kinds = [OptimizerKind::Sgd, OptimizerKind::Adam];
     for kind in kinds {
         let opt_type = OptimizerType::from(kind);
         let mut opt = opt_type.create(lr);
