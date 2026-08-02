@@ -1,5 +1,5 @@
 use ndarray::Array2;
-use ndarray_rand::{RandomExt, rand::distributions::Standard, rand_distr::Uniform};
+use ndarray_rand::{RandomExt, rand::distr::StandardUniform, rand_distr::Uniform};
 use serde::Deserialize;
 
 /// Weight initialization strategies for network layers.
@@ -16,14 +16,20 @@ impl WeightInitializer {
     /// Creates a weight matrix of the given shape using the selected initialization method.
     pub fn initialize(&self, rows: usize, cols: usize) -> Array2<f64> {
         match self {
-            WeightInitializer::Random => Array2::random((rows, cols), Standard),
+            WeightInitializer::Random => Array2::random((rows, cols), StandardUniform),
             WeightInitializer::Xavier => {
                 let limit = (6.0 / (rows + cols) as f64).sqrt();
-                Array2::random((rows, cols), Uniform::new(-limit, limit))
+                Array2::random(
+                    (rows, cols),
+                    Uniform::new(-limit, limit).expect("finite bounds cannot fail"),
+                )
             }
             WeightInitializer::He => {
                 let limit = (2.0 / rows as f64).sqrt();
-                Array2::random((rows, cols), Uniform::new(-limit, limit))
+                Array2::random(
+                    (rows, cols),
+                    Uniform::new(-limit, limit).expect("finite bounds cannot fail"),
+                )
             }
         }
     }

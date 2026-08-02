@@ -6,10 +6,13 @@ use mlp::data::loader::{Dataset, load_dataset};
 use mlp::network::callbacks::{Callback, ProgressLogger};
 use mlp::network::config::NetworkConfig;
 use mlp::network::model::Network;
-use mlp::training::monitor::{EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback};
-use mlp::training::{loss::LossFunction, optimizer::OptimizerType};
-use mlp::visualization::live_monitor::{GuiMonitorConfig, LiveTrainingMonitorCallback};
-use ndarray::{Array2, Axis, s};
+use mlp::training::metrics::Metrics;
+use mlp::training::monitor::{
+    EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback, MonitoredMetric,
+};
+use mlp::training::optimizer::OptimizerType;
+use mlp::visualization::plotter::{TrainingHistory as PlotTrainingHistory, plot_training_curves};
+use ndarray::{Array1, Array2, Axis, s};
 
 use super::types::MonitorOptions;
 
@@ -39,34 +42,18 @@ pub fn build_dataset(dataset_path: &str) -> Result<Dataset, Box<dyn Error>> {
     load_dataset(dataset_path, 1, names, 0)
 }
 
-fn standardize_from_train(
-    x_train: &Array2<f64>,
-    x_other: &Array2<f64>,
-) -> (Array2<f64>, Array2<f64>) {
-    let means = x_train
-        .mean_axis(Axis(0))
-        .expect("training features should not be empty");
-    let stds = x_train.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
-
-    let x_train_scaled = (x_train - &means) / &stds;
-    let x_other_scaled = (x_other - &means) / &stds;
-
-    (x_train_scaled, x_other_scaled)
+struct PreparedData {
+    x_train: Array2<f64>,
+    y_train: Array1<f64>,
+    x_val: Array2<f64>,
+    y_val: Array1<f64>,
+    train_mean: Array1<f64>,
+    train_std: Array1<f64>,
 }
 
-pub fn train_from_dataset(
-    dataset: &Dataset,
-    network_config: &NetworkConfig,
-    gui: bool,
-    monitor_options: &MonitorOptions,
-    model_out: Option<&Path>,
-) -> Result<Network, Box<dyn Error>> {
-    // Baseline feature prep mirrors training_learning_curve_test.
+fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
     let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
-    let y = dataset
-        .features
-        .column(0)
-        .mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
+    let y = dataset.features.column(0).mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
 
     let n = x_raw.nrows();
     if n < 3 {
@@ -74,68 +61,69 @@ pub fn train_from_dataset(
     }
 
     let train_end = (0.85 * n as f64).round() as usize;
-    let val_end = n;
-    if train_end == 0 || val_end <= train_end {
+    if train_end == 0 || n <= train_end {
         return Err("dataset split produced empty training or validation set".into());
     }
 
     let x_train_raw = x_raw.slice(s![0..train_end, ..]).to_owned();
-    let x_val_raw = x_raw.slice(s![train_end..val_end, ..]).to_owned();
+    let x_val_raw = x_raw.slice(s![train_end..n, ..]).to_owned();
     let y_train = y.slice(s![0..train_end]).to_owned();
-    let y_val = y.slice(s![train_end..val_end]).to_owned();
-    let (x_train, x_val) = standardize_from_train(&x_train_raw, &x_val_raw);
+    let y_val = y.slice(s![train_end..n]).to_owned();
 
-    let means = x_train_raw
+    let train_mean = x_train_raw
         .mean_axis(Axis(0))
         .expect("training features should not be empty");
-    let stds = x_train_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
+    let train_std = x_train_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
 
-    let mut network = network_config.build_network();
-    network.feature_mean = Some(means);
-    network.feature_std = Some(stds);
-    let epochs = network_config.epochs;
-    let batch_size = network_config.batch_size;
+    let x_train = (&x_train_raw - &train_mean) / &train_std;
+    let x_val = (&x_val_raw - &train_mean) / &train_std;
 
-    let mut monitor = LiveTrainingMonitorCallback::new(GuiMonitorConfig::from_env(
-        gui,
-        monitor_options.metrics.clone(),
-    ));
-    let mut history = HistoryCallback::new();
-    let mut early_stopping = EarlyStoppingCallback::new(EarlyStoppingConfig {
-        enabled: monitor_options.early_stopping,
-        metric: monitor_options.monitor_metric,
-        mode: monitor_options.monitor_mode,
-        patience: monitor_options.monitor_patience,
-        min_delta: monitor_options.monitor_min_delta,
-        start_epoch: monitor_options.monitor_start_epoch,
-        restore_best_weights: true,
-    });
-    let mut progress_logger = ProgressLogger::new(epochs);
-    let mut callbacks: Vec<&mut dyn Callback> = vec![
-        &mut monitor,
-        &mut history,
-        &mut early_stopping,
-        &mut progress_logger,
-    ];
+    Ok(PreparedData {
+        x_train,
+        y_train,
+        x_val,
+        y_val,
+        train_mean,
+        train_std,
+    })
+}
 
-    let metrics = network.fit_with_callbacks(
-        x_train.view(),
-        y_train.view(),
-        Some((x_val.view(), y_val.view())),
-        batch_size,
-        epochs,
-        OptimizerType::for_kind(network_config.optimizer, network_config.weight_decay),
-        LossFunction::CategoricalCrossEntropy,
-        &mut callbacks,
-    );
+fn timestamp_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yy = if m <= 2 { y + 1 } else { y };
+    let h = sod / 3600;
+    let mi = (sod % 3600) / 60;
+    let s = sod % 60;
+    format!("{yy:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}")
+}
 
-    drop(callbacks);
+fn plot_history_from(history: &HistoryCallback) -> PlotTrainingHistory {
+    let epochs = &history.history().epochs;
+    PlotTrainingHistory {
+        train_loss: epochs.iter().filter_map(|e| e.loss).collect(),
+        val_loss: epochs.iter().filter_map(|e| e.val_loss).collect(),
+        train_accuracy: epochs.iter().filter_map(|e| e.accuracy).collect(),
+        val_accuracy: epochs.iter().filter_map(|e| e.val_accuracy).collect(),
+        train_precision: epochs.iter().filter_map(|e| e.precision).collect(),
+        val_precision: epochs.iter().filter_map(|e| e.val_precision).collect(),
+    }
+}
 
-    // Keras `restore_best_weights`: when early stopping is enabled the weights
-    // are rolled back to the best monitored epoch, so the saved model is the
-    // best one rather than the last epoch's. No-op when early stopping is off.
-    early_stopping.restore_best(&mut network);
-
+fn print_summary_line(metrics: &Metrics) {
     println!(
         "{} {} - {} - {} - {}",
         bold(&paint("Training summary:", Tone::Success)),
@@ -156,11 +144,15 @@ pub fn train_from_dataset(
             Tone::ValMetric
         )
     );
-    println!(
-        "{} {}",
-        paint("Monitor points:", Tone::Info),
-        paint(&format!("{} epochs", monitor.history_len()), Tone::Accent)
-    );
+}
+
+fn print_training_summary(
+    metrics: &Metrics,
+    monitor_options: &MonitorOptions,
+    early_stopping: &EarlyStoppingCallback,
+    history: &HistoryCallback,
+) {
+    print_summary_line(metrics);
     println!(
         "{} {}",
         paint("History records:", Tone::Info),
@@ -175,17 +167,108 @@ pub fn train_from_dataset(
             paint("Early stopping triggered at epoch", Tone::Warn),
             paint(&(stopped_epoch + 1).to_string(), Tone::Warn),
             paint(
-                &format!("(monitored: {})", monitor_options.monitor_metric.as_str()),
+                &format!("(monitored: {})", monitor_options.early_stop_metric.as_str()),
                 Tone::Warn
             )
         );
     }
+}
 
+fn curve_file_path(config_name: Option<&str>) -> String {
+    let config_tag = config_name
+        .map(|name| format!("{name}_"))
+        .unwrap_or_default();
+    format!(
+        "reports/learning_curves_{config_tag}{}.png",
+        timestamp_utc()
+    )
+}
+
+fn ensure_reports_dir() -> bool {
+    if let Err(e) = std::fs::create_dir_all("reports") {
+        eprintln!(
+            "{} {e}",
+            paint(
+                "Warning: could not create reports/ for learning curves:",
+                Tone::Warn
+            )
+        );
+        return false;
+    }
+    true
+}
+
+fn export_learning_curves(
+    history: &HistoryCallback,
+    config_name: Option<&str>,
+    metrics: &[MonitoredMetric],
+) {
+    if !ensure_reports_dir() {
+        return;
+    }
+    let curve_path = curve_file_path(config_name);
+    let plot_history = plot_history_from(history);
+    match plot_training_curves(&plot_history, &curve_path, metrics) {
+        Ok(()) => println!(
+            "{} {}",
+            paint("Learning curves saved:", Tone::Success),
+            curve_path
+        ),
+        Err(e) => eprintln!(
+            "{} {e}",
+            paint("Warning: could not save learning curves:", Tone::Warn)
+        ),
+    }
+}
+
+fn setup_callbacks(
+    monitor_options: &MonitorOptions,
+    epochs: usize,
+) -> (HistoryCallback, EarlyStoppingCallback, ProgressLogger) {
+    let history = HistoryCallback::new();
+    let early_stopping = EarlyStoppingCallback::new(EarlyStoppingConfig {
+        enabled: monitor_options.early_stopping,
+        metric: monitor_options.early_stop_metric,
+        mode: monitor_options.early_stop_mode,
+        patience: monitor_options.early_stop_patience,
+        min_delta: monitor_options.early_stop_min_delta,
+        start_epoch: monitor_options.early_stop_start_epoch,
+        restore_best_weights: true,
+    });
+    let progress_logger = ProgressLogger::new(epochs);
+    (history, early_stopping, progress_logger)
+}
+
+fn fit_network(
+    network: &mut Network,
+    data: &PreparedData,
+    network_config: &NetworkConfig,
+    callbacks: &mut [&mut dyn Callback],
+) -> Metrics {
+    network.fit_with_callbacks(
+        data.x_train.view(),
+        data.y_train.view(),
+        Some((data.x_val.view(), data.y_val.view())),
+        mlp::network::model::FitConfig {
+            batch_size: network_config.batch_size,
+            epochs: network_config.epochs,
+            optimizer: OptimizerType::for_kind(network_config.optimizer, network_config.weight_decay),
+            loss_fn: network_config.loss,
+        },
+        callbacks,
+    )
+}
+
+fn save_artifacts(
+    network: &mut Network,
+    history: &HistoryCallback,
+    monitor_options: &MonitorOptions,
+    model_out: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
     if let Some(path) = &monitor_options.history_out {
         history.save_json(path)?;
         println!("{} {}", paint("Saved metric history:", Tone::Success), path);
     }
-
     if let Some(path) = model_out {
         network.save(path)?;
         println!(
@@ -194,8 +277,44 @@ pub fn train_from_dataset(
             path.display()
         );
     }
+    Ok(())
+}
 
-    monitor.keep_open_until_closed();
+pub fn train_from_dataset(
+    dataset: &Dataset,
+    network_config: &NetworkConfig,
+    monitor_options: &MonitorOptions,
+    config_name: Option<&str>,
+    model_out: Option<&Path>,
+) -> Result<Network, Box<dyn Error>> {
+    let data = prepare_training_data(dataset)?;
+
+    let mut network = network_config.build_network();
+    network.feature_mean = Some(data.train_mean.clone());
+    network.feature_std = Some(data.train_std.clone());
+
+    let (mut history, mut early_stopping, mut progress_logger) =
+        setup_callbacks(monitor_options, network_config.epochs);
+    let mut callbacks: Vec<&mut dyn Callback> =
+        vec![&mut history, &mut early_stopping, &mut progress_logger];
+
+    let metrics = fit_network(&mut network, &data, network_config, &mut callbacks);
+    drop(callbacks);
+
+    // Keras `restore_best_weights`: when early stopping is enabled the weights
+    // are rolled back to the best monitored epoch, so the saved model is the
+    // best one rather than the last epoch's. No-op when early stopping is off.
+    early_stopping.restore_best(&mut network);
+
+    print_training_summary(&metrics, monitor_options, &early_stopping, &history);
+    save_artifacts(&mut network, &history, monitor_options, model_out)?;
+
+    // Export one static learning-curve PNG per trained model so runs never
+    // overwrite each other: the filename embeds the YAML config name and a
+    // timestamp, and the chart carries every monitored metric (train/val loss,
+    // accuracy, precision) of that model on a single image.
+    export_learning_curves(&history, config_name, &monitor_options.metrics);
+
     Ok(network)
 }
 
@@ -247,7 +366,7 @@ output_layers:
         let path = data_csv_path();
         let dataset = build_dataset(&path).expect("data should load");
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
+        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
         assert!(result.is_ok(), "training failed: {:?}", result.err());
     }
 
@@ -261,7 +380,7 @@ output_layers:
             feature_names: Vec::new(),
         };
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
+        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
         let Err(e) = result else {
             panic!("expected Err for < 3 rows")
         };
@@ -279,7 +398,7 @@ output_layers:
             feature_names: Vec::new(),
         };
         let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, false, &MonitorOptions::default(), None);
+        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
         let Err(e) = result else {
             panic!("expected Err for bad split")
         };
@@ -304,7 +423,7 @@ output_layers:
             history_out: Some(history_path.clone()),
             ..MonitorOptions::default()
         };
-        let result = train_from_dataset(&dataset, &config, false, &opts, None);
+        let result = train_from_dataset(&dataset, &config, &opts, None, None);
         let _ = std::fs::remove_file(&history_path);
         assert!(result.is_ok(), "training failed: {:?}", result.err());
     }
@@ -323,12 +442,12 @@ output_layers:
         let result = train_from_dataset(
             &dataset,
             &config,
-            false,
             &MonitorOptions::default(),
+            None,
             Some(Path::new(&model_path)),
         );
         let saved = result.is_ok() && Path::new(&model_path).exists();
         let _ = std::fs::remove_file(&model_path);
-        assert!(saved, "model should have been saved before the GUI blocks");
+        assert!(saved, "model should have been saved");
     }
 }

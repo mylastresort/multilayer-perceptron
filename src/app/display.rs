@@ -27,7 +27,7 @@ fn group_label(group: LayerGroup) -> &'static str {
     }
 }
 
-pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_path: &str) {
+fn config_header() {
     println!(
         "{}",
         paint(
@@ -49,8 +49,24 @@ pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_p
             Tone::Accent
         )
     );
+}
+
+fn config_footer() {
+    println!(
+        "{}",
+        paint(
+            "+------------------------------------------------------------+",
+            Tone::Accent
+        )
+    );
+}
+
+fn print_config_paths(dataset_path: &str, config_path: &str) {
     println!(" {} {}", paint("Dataset path :", Tone::Info), dataset_path);
     println!(" {} {}", paint("Config path  :", Tone::Info), config_path);
+}
+
+fn print_hyperparameters(config: &NetworkConfig) {
     println!(
         " {} {:.6}",
         paint("Learning rate:", Tone::Info),
@@ -62,7 +78,14 @@ pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_p
         paint("Batch size   :", Tone::Info),
         config.batch_size
     );
+    println!(
+        " {} {}",
+        paint("Loss fn      :", Tone::Info),
+        config.loss.as_str()
+    );
+}
 
+fn print_layer_sizes(config: &NetworkConfig) {
     let input_sizes: Vec<usize> = config.input_layers.iter().map(|layer| layer.size).collect();
     let hidden_sizes: Vec<usize> = config
         .hidden_layers
@@ -89,7 +112,9 @@ pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_p
         paint("Output layers:", Tone::ValMetric),
         output_sizes
     );
+}
 
+fn print_transition_header() {
     println!(
         "{}",
         paint(
@@ -101,7 +126,9 @@ pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_p
         " {}",
         bold(&paint("Resolved transitions (with defaults):", Tone::Info))
     );
+}
 
+fn print_resolved_transitions(config: &NetworkConfig) {
     for (idx, spec) in config.resolved_layer_specs().iter().enumerate() {
         println!(
             "  {:>2}. {:>3} -> {:>3} | {}={} | {}={} | {}={}",
@@ -116,14 +143,16 @@ pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_p
             initializer_label(spec.initializer)
         );
     }
+}
 
-    println!(
-        "{}",
-        paint(
-            "+------------------------------------------------------------+",
-            Tone::Accent
-        )
-    );
+pub fn print_verbose_config(config: &NetworkConfig, dataset_path: &str, config_path: &str) {
+    config_header();
+    print_config_paths(dataset_path, config_path);
+    print_hyperparameters(config);
+    print_layer_sizes(config);
+    print_transition_header();
+    print_resolved_transitions(config);
+    config_footer();
 }
 
 pub fn print_loaded_dataset(dataset_path: &str, rows: usize, cols: usize) {

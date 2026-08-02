@@ -19,6 +19,7 @@ use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
 use crate::network::{activation::ActivationFunction, layer::Layer, model::Network};
+use crate::training::loss::LossFunction;
 
 // ---------------------------------------------------------------------------
 // On-disk representation
@@ -39,6 +40,11 @@ struct SavedNetwork {
     feature_mean: Option<Vec<f64>>,
     #[serde(default)]
     feature_std: Option<Vec<f64>>,
+    /// Loss function used for training; reused by the prediction program so
+    /// training and evaluation always agree. Defaults to CCE for models saved
+    /// before this field existed.
+    #[serde(default)]
+    loss: LossFunction,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +105,7 @@ impl Network {
             layers: self.layers.iter().map(SavedLayer::from).collect(),
             feature_mean: self.feature_mean.as_ref().map(|m| m.to_vec()),
             feature_std: self.feature_std.as_ref().map(|s| s.to_vec()),
+            loss: self.loss,
         };
         let json = serde_json::to_string_pretty(&saved)?;
         fs::write(path, json)?;
@@ -137,6 +144,7 @@ impl Network {
             learning_rate: saved.learning_rate,
             feature_mean,
             feature_std,
+            loss: saved.loss,
         })
     }
 }
@@ -149,7 +157,7 @@ mod tests {
     };
 
     fn three_layer_net() -> Network {
-        Network::new()
+        Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -280,5 +288,38 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(loaded.layers.len(), 3);
         assert!((loaded.learning_rate - net.learning_rate).abs() < 1e-12);
+    }
+
+    #[test]
+    fn save_and_load_preserves_loss_function() {
+        use crate::training::loss::LossFunction;
+        let mut net = three_layer_net();
+        net.loss = LossFunction::BinaryCrossEntropy;
+        let path =
+            std::env::temp_dir().join(format!("mlp_persist_loss_{}.json", std::process::id()));
+        net.save(&path).unwrap();
+        let loaded = Network::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.loss, LossFunction::BinaryCrossEntropy);
+    }
+
+    #[test]
+    fn load_model_without_loss_defaults_to_categorical_cross_entropy() {
+        use crate::training::loss::LossFunction;
+        let json = serde_json::json!({
+            "learning_rate": 0.01,
+            "layers": [
+                { "weights": [[0.1, 0.2]], "bias": [0.0, 0.0], "activation": "sigmoid" },
+                { "weights": [[0.3, 0.4], [0.5, 0.6]], "bias": [0.0, 0.0], "activation": "sigmoid" },
+                { "weights": [[0.7], [0.8]], "bias": [0.0], "activation": "softmax" }
+            ]
+        })
+        .to_string();
+
+        let path = std::env::temp_dir().join(format!("mlp_no_loss_{}.json", std::process::id()));
+        std::fs::write(&path, json).unwrap();
+        let loaded = Network::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.loss, LossFunction::CategoricalCrossEntropy);
     }
 }

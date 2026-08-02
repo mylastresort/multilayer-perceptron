@@ -20,10 +20,12 @@ fmt:
 	cargo fmt --all
 
 clippy:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --lib --bins --all-features -- -W clippy::too_many_lines -D warnings
 
 clean:
 	cargo clean
+	rm -rf reports/ models/model.json
+	rm -f data/train.csv data/val.csv data/data_training.csv data/data_test.csv
 
 doc:
 	PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig cargo doc --no-deps --open

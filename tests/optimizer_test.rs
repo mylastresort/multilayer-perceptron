@@ -6,7 +6,7 @@ use mlp::training::optimizer::{Adam, Optimizer, SGD};
 use ndarray::{Array1, Array2};
 
 fn tiny_network() -> Network {
-    Network::new()
+    Network::builder()
         .add_layer(Layer::new(
             2,
             4,

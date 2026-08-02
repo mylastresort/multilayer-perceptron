@@ -5,7 +5,7 @@ use mlp::network::{
 #[test]
 #[should_panic(expected = "at least 2 hidden layers")]
 fn network_builder_requires_two_hidden_layers() {
-    let _ = Network::new()
+    let _ = Network::builder()
         .add_layer(Layer::new(
             30,
             24,
@@ -23,7 +23,7 @@ fn network_builder_requires_two_hidden_layers() {
 
 #[test]
 fn network_builder_allows_two_hidden_layers() {
-    let network = Network::new()
+    let network = Network::builder()
         .add_layer(Layer::new(
             30,
             24,

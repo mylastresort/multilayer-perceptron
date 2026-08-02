@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::network::{
     activation::ActivationFunction, initializer::WeightInitializer, layer::Layer, model::Network,
 };
-use crate::training::optimizer::OptimizerKind;
+use crate::training::{loss::LossFunction, optimizer::OptimizerKind};
 
 #[derive(Debug, Clone, Copy)]
 pub enum LayerGroup {
@@ -36,6 +36,8 @@ pub struct NetworkConfig {
     pub optimizer: OptimizerKind,
     #[serde(default)]
     pub weight_decay: f64,
+    #[serde(default)]
+    pub loss: LossFunction,
     pub input_layers: Vec<LayerConfig>,
     pub hidden_layers: Vec<LayerConfig>,
     pub output_layers: Vec<LayerConfig>,
@@ -72,6 +74,19 @@ fn default_initializer() -> WeightInitializer {
     WeightInitializer::He
 }
 
+fn default_activation_for(group: LayerGroup) -> ActivationFunction {
+    match group {
+        LayerGroup::Output => default_output_activation(),
+        LayerGroup::Input | LayerGroup::Hidden => default_hidden_activation(),
+    }
+}
+
+fn activation_for(group: LayerGroup, layer: &LayerConfig) -> ActivationFunction {
+    layer
+        .activation
+        .unwrap_or_else(|| default_activation_for(group))
+}
+
 impl NetworkConfig {
     /// Loads a [`NetworkConfig`] from a YAML file.
     pub fn from_yaml_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
@@ -83,7 +98,9 @@ impl NetworkConfig {
 
     /// Builds a [`Network`] from this configuration.
     pub fn build_network(&self) -> Network {
-        let mut builder = Network::new().learning_rate(self.learning_rate);
+        let mut builder = Network::builder()
+            .learning_rate(self.learning_rate)
+            .loss(self.loss);
 
         for spec in self.resolved_layer_specs() {
             builder = builder.add_layer(Layer::new(
@@ -99,46 +116,36 @@ impl NetworkConfig {
 
     /// Resolves the full layer transition specs (sizes, activations, initializers).
     pub fn resolved_layer_specs(&self) -> Vec<LayerTransitionSpec> {
-        let mut groups: Vec<(LayerGroup, &LayerConfig)> = Vec::new();
-        groups.extend(
-            self.input_layers
-                .iter()
-                .map(|layer| (LayerGroup::Input, layer)),
-        );
-        groups.extend(
-            self.hidden_layers
-                .iter()
-                .map(|layer| (LayerGroup::Hidden, layer)),
-        );
-        groups.extend(
-            self.output_layers
-                .iter()
-                .map(|layer| (LayerGroup::Output, layer)),
-        );
-
         let mut specs = Vec::new();
-        for window in groups.windows(2) {
+        for window in self.grouped_layers().windows(2) {
             let (_, current) = window[0];
             let (next_group, next) = window[1];
-
-            let activation = next.activation.unwrap_or_else(|| match next_group {
-                LayerGroup::Hidden => default_hidden_activation(),
-                LayerGroup::Output => default_output_activation(),
-                LayerGroup::Input => default_hidden_activation(),
-            });
-
-            let initializer = next.initializer.unwrap_or_else(default_initializer);
-
             specs.push(LayerTransitionSpec {
                 from_size: current.size,
                 to_size: next.size,
                 to_group: next_group,
-                activation,
-                initializer,
+                activation: activation_for(next_group, next),
+                initializer: next.initializer.unwrap_or_else(default_initializer),
             });
         }
-
         specs
+    }
+
+    fn grouped_layers(&self) -> Vec<(LayerGroup, &LayerConfig)> {
+        self.input_layers
+            .iter()
+            .map(|layer| (LayerGroup::Input, layer))
+            .chain(
+                self.hidden_layers
+                    .iter()
+                    .map(|layer| (LayerGroup::Hidden, layer)),
+            )
+            .chain(
+                self.output_layers
+                    .iter()
+                    .map(|layer| (LayerGroup::Output, layer)),
+            )
+            .collect()
     }
 
     fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -181,6 +188,38 @@ impl NetworkConfig {
 #[cfg(test)]
 mod tests {
     use super::NetworkConfig;
+    use crate::training::loss::LossFunction;
+
+    #[test]
+    fn parses_yaml_loss_field() {
+        let yaml = r#"
+loss: categoricalCrossentropy
+input_layers:
+  - size: 30
+hidden_layers:
+  - size: 24
+  - size: 24
+output_layers:
+  - size: 2
+"#;
+        let config: NetworkConfig = serde_yaml::from_str(yaml).expect("yaml should parse");
+        assert_eq!(config.loss, LossFunction::CategoricalCrossEntropy);
+    }
+
+    #[test]
+    fn loss_defaults_to_categorical_cross_entropy() {
+        let yaml = r#"
+input_layers:
+  - size: 4
+hidden_layers:
+  - size: 4
+  - size: 4
+output_layers:
+  - size: 2
+"#;
+        let config: NetworkConfig = serde_yaml::from_str(yaml).expect("yaml should parse");
+        assert_eq!(config.loss, LossFunction::CategoricalCrossEntropy);
+    }
 
     #[test]
     fn parses_yaml_network_config() {

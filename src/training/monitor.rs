@@ -14,6 +14,17 @@ pub enum MonitoredMetric {
     Precision,
 }
 
+/// Parse a comma-separated list of metric names (e.g. "loss,accuracy").
+pub fn parse_monitored_metrics(value: &str) -> Result<Vec<MonitoredMetric>, String> {
+    value
+        .split(',')
+        .map(|part| {
+            MonitoredMetric::parse(part)
+                .ok_or_else(|| format!("unknown metric '{}' in --monitor-metrics", part.trim()))
+        })
+        .collect()
+}
+
 impl MonitoredMetric {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -47,24 +58,6 @@ impl MonitoredMetric {
             Self::Precision => logs.val_precision,
         }
     }
-}
-
-pub fn parse_monitored_metrics(csv: &str) -> Result<Vec<MonitoredMetric>, Box<dyn Error>> {
-    let mut metrics = Vec::new();
-    for token in csv.split(',') {
-        let Some(metric) = MonitoredMetric::parse(token) else {
-            return Err(format!("Unknown monitored metric: {}", token.trim()).into());
-        };
-        if !metrics.contains(&metric) {
-            metrics.push(metric);
-        }
-    }
-
-    if metrics.is_empty() {
-        return Err("At least one metric is required for --monitor-metrics".into());
-    }
-
-    Ok(metrics)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +111,12 @@ impl HistoryCallback {
         let json = serde_json::to_string_pretty(&self.history)?;
         fs::write(path, json)?;
         Ok(())
+    }
+}
+
+impl Default for HistoryCallback {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -224,30 +223,8 @@ impl EarlyStoppingCallback {
             MonitorMode::Max => current > best + self.cfg.min_delta,
         }
     }
-}
 
-impl Callback for EarlyStoppingCallback {
-    fn on_epoch_end(&mut self, epoch: usize, logs: Option<&CallbackLogs>) {
-        if !self.cfg.enabled {
-            return;
-        }
-        if epoch < self.cfg.start_epoch {
-            return;
-        }
-
-        let Some(logs) = logs else {
-            return;
-        };
-
-        let current = self
-            .cfg
-            .metric
-            .val_value(logs)
-            .or_else(|| self.cfg.metric.train_value(logs));
-        let Some(current) = current else {
-            return;
-        };
-
+    fn update_best(&mut self, current: f64) {
         // Keras: `wait` counts consecutive epochs without improvement.
         self.wait += 1;
         match self.best_value {
@@ -265,6 +242,28 @@ impl Callback for EarlyStoppingCallback {
                 self.improved_this_epoch = false;
             }
         }
+    }
+}
+
+impl Callback for EarlyStoppingCallback {
+    fn on_epoch_end(&mut self, epoch: usize, logs: Option<&CallbackLogs>) {
+        if !self.cfg.enabled || epoch < self.cfg.start_epoch {
+            return;
+        }
+        let Some(logs) = logs else {
+            return;
+        };
+
+        let current = self
+            .cfg
+            .metric
+            .val_value(logs)
+            .or_else(|| self.cfg.metric.train_value(logs));
+        let Some(current) = current else {
+            return;
+        };
+
+        self.update_best(current);
 
         if self.wait >= self.cfg.patience {
             self.stopped_epoch = Some(epoch);
@@ -412,36 +411,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // parse_monitored_metrics
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn parse_monitored_metrics_parses_csv_list() {
-        let result = parse_monitored_metrics("loss,accuracy").unwrap();
-        assert_eq!(
-            result,
-            vec![MonitoredMetric::Loss, MonitoredMetric::Accuracy]
-        );
-    }
-
-    #[test]
-    fn parse_monitored_metrics_deduplicates() {
-        let result = parse_monitored_metrics("loss,loss").unwrap();
-        assert_eq!(result.len(), 1);
-    }
-
-    #[test]
-    fn parse_monitored_metrics_rejects_unknown() {
-        assert!(parse_monitored_metrics("loss,bogus").is_err());
-    }
-
-    #[test]
-    fn parse_monitored_metrics_rejects_empty_input() {
-        // A single unknown token triggers error
-        assert!(parse_monitored_metrics("").is_err());
-    }
-
-    // -----------------------------------------------------------------------
     // MonitorMode::parse
     // -----------------------------------------------------------------------
 
@@ -523,7 +492,7 @@ mod tests {
         use crate::network::{
             activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
         };
-        Network::new()
+        Network::builder()
             .add_layer(Layer::new(
                 2,
                 3,

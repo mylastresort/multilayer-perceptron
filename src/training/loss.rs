@@ -1,10 +1,55 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use serde::{Deserialize, Serialize};
 
 /// Supported loss functions for training.
+///
+/// `CategoricalCrossEntropy` is the default: for the 2-class breast-cancer
+/// problem it is equivalent to binary cross-entropy (BCE with one-hot targets),
+/// which is why training and prediction share the same loss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LossFunction {
     MSE,
+    #[serde(
+        alias = "binary_crossentropy",
+        alias = "binaryCrossEntropy",
+        alias = "bce"
+    )]
     BinaryCrossEntropy,
+    #[default]
+    #[serde(
+        alias = "categorical_crossentropy",
+        alias = "categoricalCrossentropy",
+        alias = "cce"
+    )]
     CategoricalCrossEntropy,
+}
+
+impl LossFunction {
+    /// Human-readable lowercase identifier, used for CLI errors and display.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MSE => "mse",
+            Self::BinaryCrossEntropy => "binary_cross_entropy",
+            Self::CategoricalCrossEntropy => "categorical_cross_entropy",
+        }
+    }
+
+    /// Parses a loss name from the CLI, accepting the spellings used by the
+    /// subject and Keras-style conventions.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "mse" => Some(Self::MSE),
+            "binary_cross_entropy" | "binary_crossentropy" | "binarycrossentropy" | "bce" => {
+                Some(Self::BinaryCrossEntropy)
+            }
+            "categorical_cross_entropy"
+            | "categorical_crossentropy"
+            | "categoricalcrossentropy"
+            | "cce" => Some(Self::CategoricalCrossEntropy),
+            _ => None,
+        }
+    }
 }
 
 /// Trait for loss functions, providing per-sample loss and gradient computation.
@@ -27,68 +72,132 @@ pub trait Loss {
     ) -> Array2<f64>;
 }
 
+fn assert_shape_match(predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) {
+    if predictions.nrows() != targets.len() {
+        panic!(
+            "predictions rows ({}) must match targets len ({})",
+            predictions.nrows(),
+            targets.len()
+        );
+    }
+}
+
+fn class_index(target: f64, n_classes: usize) -> usize {
+    target
+        .round()
+        .clamp(0.0, (n_classes - 1) as f64) as usize
+}
+
+fn mse_loss(predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) -> Array1<f64> {
+    let cols = predictions.ncols();
+    let mut losses = Array1::zeros(predictions.nrows());
+    for (row_idx, row) in predictions.outer_iter().enumerate() {
+        let target = targets[row_idx];
+        let mut total = 0.0;
+        for col_idx in 0..cols {
+            let diff = row[col_idx] - target;
+            total += diff * diff;
+        }
+        losses[row_idx] = total / (cols as f64);
+    }
+    losses
+}
+
+fn binary_cross_entropy_loss(
+    predictions: ArrayView2<'_, f64>,
+    targets: ArrayView1<'_, f64>,
+) -> Array1<f64> {
+    let eps = 1e-12;
+    let mut losses = Array1::zeros(predictions.nrows());
+    if predictions.ncols() == 1 {
+        for (row_idx, row) in predictions.outer_iter().enumerate() {
+            let y = targets[row_idx].clamp(0.0, 1.0);
+            let p = row[0].clamp(eps, 1.0 - eps);
+            losses[row_idx] = -(y * p.ln() + (1.0 - y) * (1.0 - p).ln());
+        }
+    } else {
+        for (row_idx, row) in predictions.outer_iter().enumerate() {
+            let p = row[class_index(targets[row_idx], predictions.ncols())].clamp(eps, 1.0 - eps);
+            losses[row_idx] = -p.ln();
+        }
+    }
+    losses
+}
+
+fn categorical_cross_entropy_loss(
+    predictions: ArrayView2<'_, f64>,
+    targets: ArrayView1<'_, f64>,
+) -> Array1<f64> {
+    let eps = 1e-12;
+    let mut losses = Array1::zeros(predictions.nrows());
+    for (row_idx, row) in predictions.outer_iter().enumerate() {
+        let p = row[class_index(targets[row_idx], predictions.ncols())].clamp(eps, 1.0 - eps);
+        losses[row_idx] = -p.ln();
+    }
+    losses
+}
+
+fn mse_gradient(predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) -> Array2<f64> {
+    let scale = 2.0 / (predictions.ncols() as f64);
+    let mut grad = predictions.to_owned();
+    for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
+        let target = targets[row_idx];
+        for col_idx in 0..row.len() {
+            row[col_idx] = (row[col_idx] - target) * scale;
+        }
+    }
+    grad
+}
+
+fn binary_cross_entropy_gradient(
+    predictions: ArrayView2<'_, f64>,
+    targets: ArrayView1<'_, f64>,
+) -> Array2<f64> {
+    let eps = 1e-12;
+    if predictions.ncols() == 1 {
+        let mut grad = Array2::zeros((predictions.nrows(), 1));
+        for (row_idx, row) in predictions.outer_iter().enumerate() {
+            let y = targets[row_idx].clamp(0.0, 1.0);
+            let p = row[0].clamp(eps, 1.0 - eps);
+            grad[[row_idx, 0]] = (p - y) / (p * (1.0 - p));
+        }
+        grad
+    } else {
+        let mut grad = predictions.to_owned();
+        for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
+            let class_idx = class_index(targets[row_idx], predictions.ncols());
+            row[class_idx] -= 1.0;
+        }
+        grad
+    }
+}
+
+fn categorical_cross_entropy_gradient(
+    predictions: ArrayView2<'_, f64>,
+    targets: ArrayView1<'_, f64>,
+) -> Array2<f64> {
+    let mut grad = predictions.to_owned();
+    for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
+        let class_idx = class_index(targets[row_idx], predictions.ncols());
+        row[class_idx] -= 1.0;
+    }
+    grad
+}
+
 impl Loss for LossFunction {
     fn compute(
         &self,
         predictions: ArrayView2<'_, f64>,
         targets: ArrayView1<'_, f64>,
     ) -> Array1<f64> {
-        if predictions.nrows() != targets.len() {
-            panic!(
-                "predictions rows ({}) must match targets len ({})",
-                predictions.nrows(),
-                targets.len()
-            );
-        }
-
-        let mut losses = Array1::zeros(predictions.nrows());
-
+        assert_shape_match(predictions, targets);
         match self {
-            LossFunction::MSE => {
-                let cols = predictions.ncols();
-                for (row_idx, row) in predictions.outer_iter().enumerate() {
-                    let target = targets[row_idx];
-                    let mut total = 0.0;
-                    for col_idx in 0..cols {
-                        let diff = row[col_idx] - target;
-                        total += diff * diff;
-                    }
-                    losses[row_idx] = total / (cols as f64);
-                }
-            }
-            LossFunction::BinaryCrossEntropy => {
-                let eps = 1e-12;
-                if predictions.ncols() == 1 {
-                    for (row_idx, row) in predictions.outer_iter().enumerate() {
-                        let y = targets[row_idx].clamp(0.0, 1.0);
-                        let p = row[0].clamp(eps, 1.0 - eps);
-                        losses[row_idx] = -(y * p.ln() + (1.0 - y) * (1.0 - p).ln());
-                    }
-                } else {
-                    for (row_idx, row) in predictions.outer_iter().enumerate() {
-                        let class_idx = targets[row_idx]
-                            .round()
-                            .clamp(0.0, (predictions.ncols() - 1) as f64)
-                            as usize;
-                        let p = row[class_idx].clamp(eps, 1.0 - eps);
-                        losses[row_idx] = -p.ln();
-                    }
-                }
-            }
+            LossFunction::MSE => mse_loss(predictions, targets),
+            LossFunction::BinaryCrossEntropy => binary_cross_entropy_loss(predictions, targets),
             LossFunction::CategoricalCrossEntropy => {
-                let eps = 1e-12;
-                for (row_idx, row) in predictions.outer_iter().enumerate() {
-                    let class_idx = targets[row_idx]
-                        .round()
-                        .clamp(0.0, (predictions.ncols() - 1) as f64)
-                        as usize;
-                    let p = row[class_idx].clamp(eps, 1.0 - eps);
-                    losses[row_idx] = -p.ln();
-                }
+                categorical_cross_entropy_loss(predictions, targets)
             }
         }
-
-        losses
     }
 
     fn gradient(
@@ -96,58 +205,14 @@ impl Loss for LossFunction {
         predictions: ArrayView2<'_, f64>,
         targets: ArrayView1<'_, f64>,
     ) -> Array2<f64> {
-        if predictions.nrows() != targets.len() {
-            panic!(
-                "predictions rows ({}) must match targets len ({})",
-                predictions.nrows(),
-                targets.len()
-            );
-        }
-
+        assert_shape_match(predictions, targets);
         match self {
-            LossFunction::MSE => {
-                let scale = 2.0 / (predictions.ncols() as f64);
-                let mut grad = predictions.to_owned();
-                for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
-                    let target = targets[row_idx];
-                    for col_idx in 0..row.len() {
-                        row[col_idx] = (row[col_idx] - target) * scale;
-                    }
-                }
-                grad
-            }
+            LossFunction::MSE => mse_gradient(predictions, targets),
             LossFunction::BinaryCrossEntropy => {
-                let eps = 1e-12;
-                if predictions.ncols() == 1 {
-                    let mut grad = Array2::zeros((predictions.nrows(), 1));
-                    for (row_idx, row) in predictions.outer_iter().enumerate() {
-                        let y = targets[row_idx].clamp(0.0, 1.0);
-                        let p = row[0].clamp(eps, 1.0 - eps);
-                        grad[[row_idx, 0]] = (p - y) / (p * (1.0 - p));
-                    }
-                    grad
-                } else {
-                    let mut grad = predictions.to_owned();
-                    for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
-                        let class_idx = targets[row_idx]
-                            .round()
-                            .clamp(0.0, (predictions.ncols() - 1) as f64)
-                            as usize;
-                        row[class_idx] -= 1.0;
-                    }
-                    grad
-                }
+                binary_cross_entropy_gradient(predictions, targets)
             }
             LossFunction::CategoricalCrossEntropy => {
-                let mut grad = predictions.to_owned();
-                for (row_idx, mut row) in grad.outer_iter_mut().enumerate() {
-                    let class_idx = targets[row_idx]
-                        .round()
-                        .clamp(0.0, (predictions.ncols() - 1) as f64)
-                        as usize;
-                    row[class_idx] -= 1.0;
-                }
-                grad
+                categorical_cross_entropy_gradient(predictions, targets)
             }
         }
     }
@@ -157,6 +222,54 @@ impl Loss for LossFunction {
 mod tests {
     use super::{Loss, LossFunction};
     use ndarray::{arr1, arr2};
+
+    // -----------------------------------------------------------------------
+    // LossFunction naming / parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn loss_function_parse_accepts_common_spellings() {
+        assert_eq!(LossFunction::parse("mse"), Some(LossFunction::MSE));
+        assert_eq!(
+            LossFunction::parse("binary_cross_entropy"),
+            Some(LossFunction::BinaryCrossEntropy)
+        );
+        assert_eq!(
+            LossFunction::parse("binary_crossentropy"),
+            Some(LossFunction::BinaryCrossEntropy)
+        );
+        assert_eq!(
+            LossFunction::parse("categorical_cross_entropy"),
+            Some(LossFunction::CategoricalCrossEntropy)
+        );
+        assert_eq!(
+            LossFunction::parse("categoricalCrossentropy"),
+            Some(LossFunction::CategoricalCrossEntropy)
+        );
+        assert_eq!(
+            LossFunction::parse("cce"),
+            Some(LossFunction::CategoricalCrossEntropy)
+        );
+        assert_eq!(LossFunction::parse("bogus"), None);
+    }
+
+    #[test]
+    fn loss_function_serde_round_trips() {
+        for loss in [
+            LossFunction::MSE,
+            LossFunction::BinaryCrossEntropy,
+            LossFunction::CategoricalCrossEntropy,
+        ] {
+            let json = serde_json::to_string(&loss).unwrap();
+            let back: LossFunction = serde_json::from_str(&json).unwrap();
+            assert_eq!(loss, back, "serde round-trip failed for {json}");
+        }
+        // Default is categorical cross-entropy (the 2-class BCE-equivalent).
+        assert_eq!(
+            LossFunction::default(),
+            LossFunction::CategoricalCrossEntropy
+        );
+    }
 
     // -----------------------------------------------------------------------
     // MSE

@@ -42,8 +42,8 @@ impl Normalizer for StandardScaler {
 // implementations of the Normalizer trait for MinMaxScaler
 impl Normalizer for MinMaxScaler {
     fn fit(&mut self, data: &Array2<f64>) {
-        self.min = data.fold_axis(ndarray::Axis(0), std::f64::INFINITY, |&a, &b| a.min(b));
-        self.max = data.fold_axis(ndarray::Axis(0), std::f64::NEG_INFINITY, |&a, &b| a.max(b));
+        self.min = data.fold_axis(ndarray::Axis(0), f64::INFINITY, |&a, &b| a.min(b));
+        self.max = data.fold_axis(ndarray::Axis(0), f64::NEG_INFINITY, |&a, &b| a.max(b));
     }
 
     fn transform(&self, data: &Array2<f64>) -> Array2<f64> {

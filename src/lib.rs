@@ -10,7 +10,7 @@
 //! use mlp::network::{model::Network, layer::Layer, activation::ActivationFunction, initializer::WeightInitializer};
 //! use mlp::training::{loss::LossFunction, optimizer::OptimizerType};
 //!
-//! let mut net = Network::new()
+//! let mut net = Network::builder()
 //!     .add_layer(Layer::new(30, 24, ActivationFunction::Sigmoid, WeightInitializer::He))
 //!     .add_layer(Layer::new(24, 24, ActivationFunction::Sigmoid, WeightInitializer::He))
 //!     .add_layer(Layer::new(24, 2, ActivationFunction::Softmax, WeightInitializer::He))

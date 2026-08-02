@@ -1,0 +1,16 @@
+learning_rate: 0.0005
+epochs: 500
+batch_size: 16
+optimizer: adam
+weight_decay: 0.5
+loss: categorical_cross_entropy
+
+input_layers:
+  - size: 30
+
+hidden_layers:
+  - size: 24
+  - size: 12
+
+output_layers:
+  - size: 2

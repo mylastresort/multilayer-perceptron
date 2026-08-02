@@ -1,5 +1,6 @@
-use ndarray::{ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rand::seq::SliceRandom;
+use rand::Rng;
 
 use crate::{
     console::{Tone, bold, paint},
@@ -14,6 +15,65 @@ use crate::{
         optimizer::{Optimizer, SGD},
     },
 };
+
+fn make_batch_logs(loss: f64) -> CallbackLogs {
+    CallbackLogs {
+        loss: Some(loss),
+        val_loss: None,
+        accuracy: None,
+        val_accuracy: None,
+        precision: None,
+        val_precision: None,
+    }
+}
+
+fn make_epoch_logs(metrics: &Metrics, has_val: bool) -> CallbackLogs {
+    CallbackLogs {
+        loss: Some(metrics.train_loss),
+        val_loss: has_val.then_some(metrics.val_loss),
+        accuracy: Some(metrics.train_accuracy),
+        val_accuracy: has_val.then_some(metrics.val_accuracy),
+        precision: Some(metrics.train_precision),
+        val_precision: has_val.then_some(metrics.val_precision),
+    }
+}
+
+fn print_early_stop(epoch: usize) {
+    println!(
+        "{} {}",
+        paint("Early stopping:", Tone::Warn),
+        paint(&format!("stopped at epoch {}", epoch + 1), Tone::Warn)
+    );
+}
+
+fn print_summary(metrics: &Metrics, has_val: bool) {
+    println!(
+        "{} {} - {}",
+        bold(&paint("Training finished", Tone::Success)),
+        paint(
+            &format!("accuracy={:.4}", metrics.train_accuracy),
+            Tone::TrainMetric
+        ),
+        paint(
+            &format!("precision={:.4}", metrics.train_precision),
+            Tone::TrainMetric
+        ),
+    );
+    if has_val {
+        println!(
+            "{} {} - {}",
+            paint("Validation:", Tone::Info),
+            paint(
+                &format!("val_accuracy={:.4}", metrics.val_accuracy),
+                Tone::ValMetric
+            ),
+            paint(
+                &format!("val_precision={:.4}", metrics.val_precision),
+                Tone::ValMetric
+            ),
+        );
+    }
+}
 
 pub struct Trainer {
     optimizer: Box<dyn Optimizer>,
@@ -67,6 +127,18 @@ where
     }
 }
 
+struct EpochContext<'n, 'd, 'i, 'm, 'c, R: Rng> {
+    network: &'n mut Network,
+    x_train: ArrayView2<'d, f64>,
+    y_train: ArrayView1<'d, f64>,
+    val_data: Option<(ArrayView2<'d, f64>, ArrayView1<'d, f64>)>,
+    indices: &'i mut [usize],
+    rng: &'i mut R,
+    metrics: &'m mut Metrics,
+    callbacks: &'m mut [&'c mut dyn Callback],
+    epoch: usize,
+}
+
 impl Trainer {
     pub fn new(
         optimizer: Box<dyn Optimizer>,
@@ -95,7 +167,7 @@ impl Trainer {
         callbacks: &mut [&mut dyn Callback],
     ) -> Metrics {
         let mut metrics = Metrics::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut indices: Vec<usize> = (0..x_train.nrows()).collect();
 
         for callback in callbacks.iter_mut() {
@@ -103,100 +175,17 @@ impl Trainer {
         }
 
         for epoch in 0..self.epochs {
-            for callback in callbacks.iter_mut() {
-                callback.on_epoch_begin(epoch);
-            }
-
-            indices.shuffle(&mut rng);
-
-            let mut batch_index = 0usize;
-            let mut total_loss = 0.0;
-
-            create_batches(x_train, y_train, &indices, self.batch_size).sum_by(
-                |x_batch, y_batch| {
-                    for callback in callbacks.iter_mut() {
-                        callback.on_batch_begin(batch_index);
-                    }
-
-                    let pred = network.forward(&x_batch);
-                    let batch_size = pred.nrows() as f64;
-                    let batch_loss = self
-                        .loss_fn
-                        .compute(pred.view(), y_batch.view())
-                        .mean()
-                        .unwrap_or(0.0);
-                    let mut upstream_grad = self.loss_fn.gradient(pred.view(), y_batch.view());
-                    upstream_grad /= batch_size;
-                    let gradients = network.backward(upstream_grad);
-                    self.optimizer.update(network, &gradients);
-
-                    total_loss += batch_loss;
-                    let batch_logs = CallbackLogs {
-                        loss: Some(batch_loss),
-                        val_loss: None,
-                        accuracy: None,
-                        val_accuracy: None,
-                        precision: None,
-                        val_precision: None,
-                    };
-                    for callback in callbacks.iter_mut() {
-                        callback.on_batch_end(batch_index, Some(&batch_logs));
-                    }
-
-                    batch_index += 1;
-                    batch_loss
-                },
-            );
-
-            metrics.train_loss = if batch_index == 0 {
-                0.0
-            } else {
-                total_loss / (batch_index as f64)
-            };
-
-            let train_pred = network.forward(x_train);
-            let train_scores =
-                compute_classification_scores_from_labels(train_pred.view(), y_train);
-            metrics.train_accuracy = train_scores.accuracy;
-            metrics.train_precision = train_scores.precision;
-
-            if let Some((x_val, y_val)) = val_data {
-                let val_pred = network.forward(x_val);
-                metrics.val_loss = self
-                    .loss_fn
-                    .compute(val_pred.view(), y_val)
-                    .mean()
-                    .unwrap_or(0.0);
-                let val_scores = compute_classification_scores_from_labels(val_pred.view(), y_val);
-                metrics.val_accuracy = val_scores.accuracy;
-                metrics.val_precision = val_scores.precision;
-            } else {
-                metrics.val_loss = 0.0;
-                metrics.val_accuracy = 0.0;
-                metrics.val_precision = 0.0;
-            }
-
-            let epoch_logs = CallbackLogs {
-                loss: Some(metrics.train_loss),
-                val_loss: val_data.map(|_| metrics.val_loss),
-                accuracy: Some(metrics.train_accuracy),
-                val_accuracy: val_data.map(|_| metrics.val_accuracy),
-                precision: Some(metrics.train_precision),
-                val_precision: val_data.map(|_| metrics.val_precision),
-            };
-            for callback in callbacks.iter_mut() {
-                callback.on_epoch_end(epoch, Some(&epoch_logs));
-            }
-            for callback in callbacks.iter_mut() {
-                callback.on_epoch_end_network(epoch, Some(&epoch_logs), network);
-            }
-
-            if callbacks.iter().any(|callback| callback.should_stop()) {
-                println!(
-                    "{} {}",
-                    paint("Early stopping:", Tone::Warn),
-                    paint(&format!("stopped at epoch {}", epoch + 1), Tone::Warn)
-                );
+            if self.run_training_epoch(EpochContext {
+                network,
+                x_train,
+                y_train,
+                val_data,
+                indices: &mut indices,
+                rng: &mut rng,
+                metrics: &mut metrics,
+                callbacks,
+                epoch,
+            }) {
                 break;
             }
         }
@@ -205,34 +194,128 @@ impl Trainer {
             callback.on_train_end();
         }
 
-        println!(
-            "{} {} - {}",
-            bold(&paint("Training finished", Tone::Success)),
-            paint(
-                &format!("accuracy={:.4}", metrics.train_accuracy),
-                Tone::TrainMetric
-            ),
-            paint(
-                &format!("precision={:.4}", metrics.train_precision),
-                Tone::TrainMetric
-            ),
-        );
-        if val_data.is_some() {
-            println!(
-                "{} {} - {}",
-                paint("Validation:", Tone::Info),
-                paint(
-                    &format!("val_accuracy={:.4}", metrics.val_accuracy),
-                    Tone::ValMetric
-                ),
-                paint(
-                    &format!("val_precision={:.4}", metrics.val_precision),
-                    Tone::ValMetric
-                ),
-            );
-        }
+        print_summary(&metrics, val_data.is_some());
 
         metrics
+    }
+
+    fn run_training_epoch<'d, R: Rng>(&mut self, ctx: EpochContext<'_, 'd, '_, '_, '_, R>) -> bool {
+        let EpochContext { network, x_train, y_train, val_data, indices, rng, metrics, callbacks, epoch } = ctx;
+        for callback in callbacks.iter_mut() {
+            callback.on_epoch_begin(epoch);
+        }
+        indices.shuffle(rng);
+
+        let (total_loss, batch_index) = self.run_epoch(network, x_train, y_train, indices, callbacks);
+        metrics.train_loss = if batch_index == 0 {
+            0.0
+        } else {
+            total_loss / (batch_index as f64)
+        };
+
+        self.eval_epoch(network, x_train, y_train, val_data, metrics);
+
+        let epoch_logs = make_epoch_logs(metrics, val_data.is_some());
+        for callback in callbacks.iter_mut() {
+            callback.on_epoch_end(epoch, Some(&epoch_logs));
+        }
+        for callback in callbacks.iter_mut() {
+            callback.on_epoch_end_network(epoch, Some(&epoch_logs), network);
+        }
+
+        if callbacks.iter().any(|callback| callback.should_stop()) {
+            print_early_stop(epoch);
+            return true;
+        }
+        false
+    }
+
+    fn run_epoch<'data>(
+        &mut self,
+        network: &mut Network,
+        x_train: ArrayView2<'data, f64>,
+        y_train: ArrayView1<'data, f64>,
+        indices: &[usize],
+        callbacks: &mut [&mut dyn Callback],
+    ) -> (f64, usize) {
+        let mut batch_index = 0usize;
+        let mut total_loss = 0.0;
+
+        create_batches(x_train, y_train, indices, self.batch_size).sum_by(
+            |x_batch, y_batch| {
+                for callback in callbacks.iter_mut() {
+                    callback.on_batch_begin(batch_index);
+                }
+
+                let batch_loss = self.apply_batch(network, &x_batch, &y_batch);
+                total_loss += batch_loss;
+
+                let batch_logs = make_batch_logs(batch_loss);
+                for callback in callbacks.iter_mut() {
+                    callback.on_batch_end(batch_index, Some(&batch_logs));
+                }
+
+                batch_index += 1;
+                batch_loss
+            },
+        );
+
+        (total_loss, batch_index)
+    }
+
+    fn apply_batch(&mut self, network: &mut Network, x_batch: &Array2<f64>, y_batch: &Array1<f64>) -> f64 {
+        let pred = network.forward(x_batch);
+        let batch_size = pred.nrows() as f64;
+        let batch_loss = self
+            .loss_fn
+            .compute(pred.view(), y_batch.view())
+            .mean()
+            .unwrap_or(0.0);
+        let mut upstream_grad = self.loss_fn.gradient(pred.view(), y_batch.view());
+        upstream_grad /= batch_size;
+        let gradients = network.backward(upstream_grad);
+        self.optimizer.update(network, &gradients);
+        batch_loss
+    }
+
+    fn evaluate<'data>(
+        &self,
+        network: &mut Network,
+        x: ArrayView2<'data, f64>,
+        y: ArrayView1<'data, f64>,
+    ) -> (f64, f64, f64) {
+        let pred = network.forward(x);
+        let loss = self
+            .loss_fn
+            .compute(pred.view(), y)
+            .mean()
+            .unwrap_or(0.0);
+        let scores = compute_classification_scores_from_labels(pred.view(), y);
+        (loss, scores.accuracy, scores.precision)
+    }
+
+    fn eval_epoch<'data>(
+        &self,
+        network: &mut Network,
+        x_train: ArrayView2<'data, f64>,
+        y_train: ArrayView1<'data, f64>,
+        val_data: Option<(ArrayView2<'data, f64>, ArrayView1<'data, f64>)>,
+        metrics: &mut Metrics,
+    ) {
+        let (_, accuracy, precision) = self.evaluate(network, x_train, y_train);
+        metrics.train_accuracy = accuracy;
+        metrics.train_precision = precision;
+
+        if let Some((x_val, y_val)) = val_data {
+            let (loss, accuracy, precision) = self.evaluate(network, x_val, y_val);
+            metrics.val_loss = loss;
+            metrics.val_accuracy = accuracy;
+            metrics.val_precision = precision;
+        } else {
+            metrics.val_loss = 0.0;
+            metrics.val_accuracy = 0.0;
+            metrics.val_precision = 0.0;
+        }
     }
 }
 
@@ -253,7 +336,7 @@ mod tests {
     use ndarray::{Array1, Array2};
 
     fn tiny_net() -> Network {
-        Network::new()
+        Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
