@@ -191,9 +191,7 @@ impl Loss for LossFunction {
         assert_shape_match(predictions, targets);
         match self {
             LossFunction::MSE => mse_gradient(predictions, targets),
-            LossFunction::BinaryCrossEntropy => {
-                binary_cross_entropy_gradient(predictions, targets)
-            }
+            LossFunction::BinaryCrossEntropy => binary_cross_entropy_gradient(predictions, targets),
             LossFunction::CategoricalCrossEntropy => {
                 categorical_cross_entropy_gradient(predictions, targets)
             }

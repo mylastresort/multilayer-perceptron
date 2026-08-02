@@ -1,5 +1,6 @@
 use std::error::Error;
 
+use clap::{CommandFactory, Parser, Subcommand as ClapSubcommand};
 use mlp::network::config::NetworkConfig;
 use mlp::training::monitor::{MonitorMode, MonitoredMetric, parse_monitored_metrics};
 
@@ -13,254 +14,108 @@ pub fn default_config_path() -> String {
     format!("{}/models/mandatory_sgd.yaml", env!("CARGO_MANIFEST_DIR"))
 }
 
-const USAGE_TEMPLATE: &str = concat!(
-    "Usage: {bin} <SUBCOMMAND> [OPTIONS]\n",
-    "\n",
-    "Subcommands:\n",
-    "  split    Separate the dataset into train and validation CSV files\n",
-    "  train    Train the network and save the model\n",
-    "  predict  Load a saved model and evaluate on a dataset (binary cross-entropy)\n",
-    "\n",
-    "Common options:\n",
-    "  -d, --dataset <PATH>               Dataset CSV path (required for train)\n",
-    "  -h, --help                         Print help\n",
-    "\n",
-    "split options:\n",
-    "      --train-out <PATH>             Output CSV for training split\n",
-    "      --val-out   <PATH>             Output CSV for validation split\n",
-    "      --ratio     <FLOAT>            Training fraction (default 0.8)\n",
-    "\n",
-    "train options:\n",
-    "  -d, --dataset <PATH>               Dataset CSV path (required)\n",
-    "  -c, --config <PATH>                Network/training YAML config path (required)\n",
-    "      --model-out <PATH>             Where to save the trained model (JSON)\n",
-    "  -v, --verbose                      Print loaded config summary\n",
-    "  -g, --gui                          Open live learning-curve GUI\n",
-    "  -M, --monitor-metrics <CSV>        Metrics to monitor/plot\n",
-    "  -m, --early-stop-metric <METRIC>    Metric that drives early stopping\n",
-    "      --early-stop-mode <MODE>        Early-stopping direction [min|max]\n",
-    "  -p, --early-stop-patience <INT>     Early-stopping patience in epochs\n",
-    "      --early-stop-min-delta <FLOAT>  Minimum improvement threshold\n",
-    "  -s, --early-stop-start-epoch <INT>  Epoch to start early-stopping checks\n",
-    "      --early-stopping                Enable early stopping (on by default)\n",
-    "      --no-early-stopping            Disable early stopping\n",
-    "      --monitor-history-out <PATH>   Save per-epoch metric history to JSON\n",
-    "  -l, --net-learning-rate <FLOAT>    Override config learning_rate\n",
-    "  -e, --net-epochs <INT>             Override config epochs\n",
-    "  -b, --net-batch-size <INT>         Override config batch_size\n",
-    "\n",
-    "predict options:\n",
-    "      --model <PATH>                 Path to a saved model JSON\n",
-    "\n",
-    "Defaults (split/predict):\n",
-    "  --dataset {dataset}\n",
-    "  --config  {config}",
-);
+#[derive(Parser)]
+#[command(name = "mlp", disable_help_subcommand = true)]
+struct RawCli {
+    #[arg(short = 'd', long = "dataset", global = true, value_name = "PATH")]
+    dataset_path: Option<String>,
+
+    #[arg(short = 'c', long = "config", global = true, value_name = "PATH")]
+    config_path: Option<String>,
+
+    #[arg(long = "model-out", global = true, value_name = "PATH")]
+    model_out: Option<String>,
+
+    #[arg(long = "model", global = true, value_name = "PATH")]
+    model_in: Option<String>,
+
+    #[arg(
+        long = "ratio",
+        global = true,
+        default_value_t = 0.8,
+        value_name = "FLOAT"
+    )]
+    split_ratio: f64,
+
+    #[arg(long = "train-out", global = true, value_name = "PATH")]
+    train_out: Option<String>,
+
+    #[arg(long = "val-out", global = true, value_name = "PATH")]
+    val_out: Option<String>,
+
+    #[arg(short = 'v', long = "verbose", global = true)]
+    verbose: bool,
+
+    #[arg(short = 'g', long = "gui", global = true)]
+    gui: bool,
+
+    #[arg(short = 'M', long = "monitor-metrics", global = true)]
+    monitor_metrics: Option<String>,
+
+    #[arg(short = 'm', long = "early-stop-metric", global = true, value_parser = parse_metric)]
+    early_stop_metric: Option<MonitoredMetric>,
+
+    #[arg(long = "early-stop-mode", global = true, value_parser = parse_monitor_mode)]
+    early_stop_mode: Option<MonitorMode>,
+
+    #[arg(short = 'p', long = "early-stop-patience", global = true)]
+    early_stop_patience: Option<usize>,
+
+    #[arg(long = "early-stop-min-delta", global = true)]
+    early_stop_min_delta: Option<f64>,
+
+    #[arg(short = 's', long = "early-stop-start-epoch", global = true)]
+    early_stop_start_epoch: Option<usize>,
+
+    #[arg(long = "early-stopping", global = true)]
+    early_stopping: bool,
+
+    #[arg(long = "no-early-stopping", global = true)]
+    no_early_stopping: bool,
+
+    #[arg(long = "monitor-history-out", global = true, value_name = "PATH")]
+    monitor_history_out: Option<String>,
+
+    #[arg(short = 'l', long = "net-learning-rate", global = true)]
+    net_learning_rate: Option<f64>,
+
+    #[arg(short = 'e', long = "net-epochs", global = true)]
+    net_epochs: Option<usize>,
+
+    #[arg(short = 'b', long = "net-batch-size", global = true)]
+    net_batch_size: Option<usize>,
+
+    #[command(subcommand)]
+    command: RawSubcommand,
+}
+
+#[derive(ClapSubcommand)]
+#[command(rename_all = "kebab-case")]
+enum RawSubcommand {
+    Split,
+    Train,
+    Predict,
+}
 
 pub fn usage(binary_name: &str) -> String {
-    USAGE_TEMPLATE
-        .replace("{bin}", binary_name)
-        .replace("{dataset}", &default_dataset_path())
-        .replace("{config}", &default_config_path())
+    let mut command = RawCli::command().bin_name(binary_name.to_string());
+    command.render_long_help().to_string()
 }
 
-const VALUE_FLAGS: &[&str] = &[
-    "--dataset",
-    "-d",
-    "--config",
-    "-c",
-    "--model-out",
-    "--model",
-    "--train-out",
-    "--val-out",
-    "--ratio",
-    "--net-learning-rate",
-    "-l",
-    "--net-epochs",
-    "-e",
-    "--net-batch-size",
-    "-b",
-    "--monitor-metrics",
-    "-M",
-    "--early-stop-metric",
-    "-m",
-    "--early-stop-mode",
-    "--early-stop-patience",
-    "-p",
-    "--early-stop-min-delta",
-    "--early-stop-start-epoch",
-    "-s",
-    "--monitor-history-out",
-];
-
-#[derive(Default)]
-struct ParsedFlags {
-    dataset_path: Option<String>,
-    config_path: Option<String>,
-    model_out: Option<String>,
-    model_in: Option<String>,
-    split_ratio: f64,
-    train_out: Option<String>,
-    val_out: Option<String>,
-    verbose: bool,
-    gui: bool,
-    monitor_options: MonitorOptions,
-    net_overrides: NetOverrides,
+fn parse_metric(value: &str) -> Result<MonitoredMetric, String> {
+    MonitoredMetric::parse(value).ok_or_else(|| format!("Invalid value: {value}"))
 }
 
-enum FlagAction {
-    ExpectValue(String),
-    Handled,
+fn parse_monitor_mode(value: &str) -> Result<MonitorMode, String> {
+    MonitorMode::parse(value).ok_or_else(|| format!("Invalid value: {value}"))
 }
 
-fn parse_value<T>(arg: &str, flag: &str) -> Result<T, Box<dyn Error>>
-where
-    T: std::str::FromStr,
-{
-    arg.parse::<T>()
-        .map_err(|_| format!("Invalid value for {flag}: {arg}").into())
-}
-
-fn parse_subcommand(binary_name: &str, first: &str) -> Result<Subcommand, Box<dyn Error>> {
-    match first {
-        "split" => Ok(Subcommand::Split),
-        "train" => Ok(Subcommand::Train),
-        "predict" => Ok(Subcommand::Predict),
-        other => Err(format!("Unknown subcommand: '{other}'\n{}", usage(binary_name)).into()),
+fn app_subcommand(command: &RawSubcommand) -> Subcommand {
+    match command {
+        RawSubcommand::Split => Subcommand::Split,
+        RawSubcommand::Train => Subcommand::Train,
+        RawSubcommand::Predict => Subcommand::Predict,
     }
-}
-
-fn apply_flag(
-    flags: &mut ParsedFlags,
-    arg: &str,
-    binary_name: &str,
-) -> Result<FlagAction, Box<dyn Error>> {
-    if VALUE_FLAGS.contains(&arg) {
-        return Ok(FlagAction::ExpectValue(arg.to_string()));
-    }
-    match arg {
-        "--verbose" | "-v" => flags.verbose = true,
-        "--gui" | "-g" => flags.gui = true,
-        "--early-stopping" => flags.monitor_options.early_stopping = true,
-        "--no-early-stopping" => flags.monitor_options.early_stopping = false,
-        "--help" | "-h" => return Err(usage(binary_name).into()),
-        _ => return Err(format!("Unknown argument: {arg}\n{}", usage(binary_name)).into()),
-    }
-    Ok(FlagAction::Handled)
-}
-
-fn parse_net_numeric_flags(
-    flags: &mut ParsedFlags,
-    flag: &str,
-    arg: &str,
-) -> Result<bool, Box<dyn Error>> {
-    Ok(match flag {
-        "--net-learning-rate" | "-l" => {
-            flags.net_overrides.learning_rate = Some(parse_value(arg, flag)?);
-            true
-        }
-        "--net-epochs" | "-e" => {
-            flags.net_overrides.epochs = Some(parse_value(arg, flag)?);
-            true
-        }
-        "--net-batch-size" | "-b" => {
-            flags.net_overrides.batch_size = Some(parse_value(arg, flag)?);
-            true
-        }
-        _ => false,
-    })
-}
-
-fn parse_monitor_numeric_flags(
-    flags: &mut ParsedFlags,
-    flag: &str,
-    arg: &str,
-) -> Result<bool, Box<dyn Error>> {
-    Ok(match flag {
-        "--early-stop-patience" | "-p" => {
-            flags.monitor_options.early_stop_patience = parse_value(arg, flag)?;
-            true
-        }
-        "--early-stop-min-delta" => {
-            flags.monitor_options.early_stop_min_delta = parse_value(arg, flag)?;
-            true
-        }
-        "--early-stop-start-epoch" | "-s" => {
-            flags.monitor_options.early_stop_start_epoch = parse_value(arg, flag)?;
-            true
-        }
-        _ => false,
-    })
-}
-
-fn parse_numeric_flags(
-    flags: &mut ParsedFlags,
-    flag: &str,
-    arg: &str,
-) -> Result<bool, Box<dyn Error>> {
-    if flag == "--ratio" {
-        flags.split_ratio = parse_value(arg, flag)?;
-        return Ok(true);
-    }
-    if parse_net_numeric_flags(flags, flag, arg)? {
-        return Ok(true);
-    }
-    parse_monitor_numeric_flags(flags, flag, arg)
-}
-
-fn apply_value_flag(
-    flags: &mut ParsedFlags,
-    flag: &str,
-    arg: String,
-) -> Result<(), Box<dyn Error>> {
-    if parse_numeric_flags(flags, flag, &arg)? {
-        return Ok(());
-    }
-    match flag {
-        "--dataset" | "-d" => flags.dataset_path = Some(arg),
-        "--config" | "-c" => flags.config_path = Some(arg),
-        "--model-out" => flags.model_out = Some(arg),
-        "--model" => flags.model_in = Some(arg),
-        "--train-out" => flags.train_out = Some(arg),
-        "--val-out" => flags.val_out = Some(arg),
-        "--monitor-metrics" | "-M" => {
-            flags.monitor_options.metrics = parse_monitored_metrics(&arg)?;
-        }
-        "--early-stop-metric" | "-m" => {
-            flags.monitor_options.early_stop_metric = MonitoredMetric::parse(&arg)
-                .ok_or_else(|| format!("Invalid value for {flag}: {arg}"))?;
-        }
-        "--early-stop-mode" => {
-            flags.monitor_options.early_stop_mode = MonitorMode::parse(&arg)
-                .ok_or_else(|| format!("Invalid value for {flag}: {arg}"))?;
-        }
-        "--monitor-history-out" => flags.monitor_options.history_out = Some(arg),
-        _ => unreachable!("unsupported flag in parser state"),
-    }
-    Ok(())
-}
-
-fn parse_flags(
-    binary_name: &str,
-    rest: &[String],
-    flags: &mut ParsedFlags,
-) -> Result<(), Box<dyn Error>> {
-    let mut pending_flag: Option<String> = None;
-    for arg in rest.iter().skip(1).cloned() {
-        if let Some(flag) = pending_flag.take() {
-            apply_value_flag(flags, &flag, arg)?;
-            continue;
-        }
-        match apply_flag(flags, &arg, binary_name)? {
-            FlagAction::ExpectValue(flag) => pending_flag = Some(flag),
-            FlagAction::Handled => {}
-        }
-    }
-
-    if let Some(flag) = pending_flag {
-        return Err(format!("Missing value for {flag}\n{}", usage(binary_name)).into());
-    }
-    Ok(())
 }
 
 fn require_train_path(
@@ -278,52 +133,108 @@ fn require_train_path(
     })
 }
 
-fn resolve_args(
+fn resolve_dataset_path(
+    subcommand: &Subcommand,
+    value: Option<String>,
     binary_name: &str,
-    subcommand: Subcommand,
-    flags: ParsedFlags,
-) -> Result<CliArgs, Box<dyn Error>> {
-    let dataset_path = match subcommand {
-        Subcommand::Train => {
-            require_train_path(flags.dataset_path, "--dataset", "dataset", binary_name)?
-        }
-        _ => flags.dataset_path.unwrap_or_else(default_dataset_path),
-    };
-    let config_path = match subcommand {
-        Subcommand::Train => {
-            require_train_path(flags.config_path, "--config", "config", binary_name)?
-        }
-        _ => flags.config_path.unwrap_or_else(default_config_path),
-    };
+) -> Result<String, Box<dyn Error>> {
+    match subcommand {
+        Subcommand::Train => require_train_path(value, "--dataset", "dataset", binary_name),
+        _ => Ok(value.unwrap_or_else(default_dataset_path)),
+    }
+}
+
+fn resolve_config_path(
+    subcommand: &Subcommand,
+    value: Option<String>,
+    binary_name: &str,
+) -> Result<String, Box<dyn Error>> {
+    match subcommand {
+        Subcommand::Train => require_train_path(value, "--config", "config", binary_name),
+        _ => Ok(value.unwrap_or_else(default_config_path)),
+    }
+}
+
+fn monitor_options_from_raw(raw: &RawCli) -> Result<MonitorOptions, Box<dyn Error>> {
+    let defaults = MonitorOptions::default();
+    Ok(MonitorOptions {
+        early_stopping: raw.early_stopping || !raw.no_early_stopping,
+        early_stop_metric: raw.early_stop_metric.unwrap_or(defaults.early_stop_metric),
+        early_stop_mode: raw.early_stop_mode.unwrap_or(defaults.early_stop_mode),
+        early_stop_patience: raw
+            .early_stop_patience
+            .unwrap_or(defaults.early_stop_patience),
+        early_stop_min_delta: raw
+            .early_stop_min_delta
+            .unwrap_or(defaults.early_stop_min_delta),
+        early_stop_start_epoch: raw
+            .early_stop_start_epoch
+            .unwrap_or(defaults.early_stop_start_epoch),
+        history_out: raw.monitor_history_out.clone(),
+        metrics: monitor_metrics_from_raw(raw)?,
+    })
+}
+
+fn monitor_metrics_from_raw(raw: &RawCli) -> Result<Vec<MonitoredMetric>, Box<dyn Error>> {
+    match &raw.monitor_metrics {
+        Some(value) => parse_monitored_metrics(value).map_err(Into::into),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn net_overrides_from_raw(raw: &RawCli) -> NetOverrides {
+    NetOverrides {
+        learning_rate: raw.net_learning_rate,
+        epochs: raw.net_epochs,
+        batch_size: raw.net_batch_size,
+    }
+}
+
+fn resolve_args(binary_name: &str, raw: RawCli) -> Result<CliArgs, Box<dyn Error>> {
+    let subcommand = app_subcommand(&raw.command);
+    let monitor_options = monitor_options_from_raw(&raw)?;
+    let net_overrides = net_overrides_from_raw(&raw);
+    let dataset_path = resolve_dataset_path(&subcommand, raw.dataset_path, binary_name)?;
+    let config_path = resolve_config_path(&subcommand, raw.config_path, binary_name)?;
 
     Ok(CliArgs {
         subcommand,
         dataset_path,
         config_path,
-        verbose: flags.verbose,
-        gui: flags.gui,
-        monitor_options: flags.monitor_options,
-        net_overrides: flags.net_overrides,
-        model_out: flags.model_out,
-        model_in: flags.model_in,
-        split_ratio: flags.split_ratio,
-        train_out: flags.train_out,
-        val_out: flags.val_out,
+        verbose: raw.verbose,
+        gui: raw.gui,
+        monitor_options,
+        net_overrides,
+        model_out: raw.model_out,
+        model_in: raw.model_in,
+        split_ratio: raw.split_ratio,
+        train_out: raw.train_out,
+        val_out: raw.val_out,
     })
 }
 
+#[cfg(test)]
 pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn Error>> {
-    if rest.is_empty() || rest[0] == "--help" || rest[0] == "-h" {
+    if rest.is_empty() {
         return Err(usage(binary_name).into());
     }
 
-    let subcommand = parse_subcommand(binary_name, &rest[0])?;
-    let mut flags = ParsedFlags {
-        split_ratio: 0.8,
-        ..Default::default()
-    };
-    parse_flags(binary_name, rest, &mut flags)?;
-    resolve_args(binary_name, subcommand, flags)
+    let args = std::iter::once(binary_name.to_string())
+        .chain(rest.iter().cloned())
+        .collect::<Vec<_>>();
+    let raw = RawCli::try_parse_from(args).map_err(|err| err.to_string())?;
+    resolve_args(binary_name, raw)
+}
+
+pub fn parse_env_args() -> Result<CliArgs, Box<dyn Error>> {
+    let args = std::env::args().collect::<Vec<_>>();
+    let binary_name = args.first().cloned().unwrap_or_else(|| "mlp".to_string());
+    if args.len() == 1 {
+        println!("{}", usage(&binary_name));
+        std::process::exit(0);
+    }
+    let raw = RawCli::parse_from(args);
+    resolve_args(&binary_name, raw)
 }
 
 pub fn apply_net_overrides(

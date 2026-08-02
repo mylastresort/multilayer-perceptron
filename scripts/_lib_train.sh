@@ -30,7 +30,7 @@ run_pipeline() {
 	echo
 	echo ">> Training with config: $CONFIG"
 	# shellcheck disable=SC2086
-	TRAIN_OUTPUT=$(cargo run --quiet -- train --dataset "$train_csv" --config "$CONFIG" --model-out "$model_out" ${TRAIN_FLAGS:-} 2>&1)
+	TRAIN_OUTPUT=$(cargo run --quiet -- train --dataset "$train_csv" --config "$CONFIG" --model-out "$model_out" ${TRAIN_FLAGS:-})
 	printf '%s\n' "$TRAIN_OUTPUT"
 
 	echo
