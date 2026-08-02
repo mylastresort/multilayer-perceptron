@@ -4,7 +4,7 @@ use mlp::network::{
 use ndarray::Array2;
 
 fn build_network_with_known_weights() -> Network {
-    let mut net = Network::new()
+    let mut net = Network::builder()
         .add_layer(Layer::new(
             4,
             8,

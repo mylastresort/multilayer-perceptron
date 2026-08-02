@@ -58,6 +58,37 @@ fn stratify_keys(dataset: &Dataset, stratify_col: &str) -> Vec<String> {
         .collect()
 }
 
+fn rng_from_seed(seed: Option<u64>) -> StdRng {
+    match seed {
+        Some(seed_value) => StdRng::seed_from_u64(seed_value),
+        None => StdRng::from_rng(&mut rand::rng()),
+    }
+}
+
+// Groups row indices by the stratification key, then splits each group.
+fn stratified_split<R: Rng + ?Sized>(
+    dataset: &Dataset,
+    train_ratio: f64,
+    stratify_col: &str,
+    rng: &mut R,
+) -> (Vec<usize>, Vec<usize>) {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let keys = stratify_keys(dataset, stratify_col);
+    for (index, key) in keys.into_iter().enumerate() {
+        groups.entry(key).or_default().push(index);
+    }
+
+    let mut train_indices = Vec::new();
+    let mut test_indices = Vec::new();
+    for group in groups.values() {
+        let mut group_indices = group.clone();
+        let (group_train, group_test) = split_and_collect_indices(&mut group_indices, train_ratio, rng);
+        train_indices.extend(group_train);
+        test_indices.extend(group_test);
+    }
+    (train_indices, test_indices)
+}
+
 // Implements stratified train-test split for datasets.
 pub fn train_test_split(
     dataset: &Dataset,
@@ -65,38 +96,14 @@ pub fn train_test_split(
     seed: Option<u64>,
     stratify: Option<&str>,
 ) -> (Dataset, Dataset) {
-    let mut rng = match seed {
-        Some(seed_value) => StdRng::seed_from_u64(seed_value),
-        None => {
-            let mut thread_rng = rand::thread_rng();
-            StdRng::from_rng(&mut thread_rng).expect("Failed to initialize random generator")
-        }
-    };
+    let mut rng = rng_from_seed(seed);
 
     let (train_indices, test_indices) = match stratify {
         None => {
             let mut indices: Vec<usize> = (0..dataset_len(dataset)).collect();
             split_and_collect_indices(&mut indices, train_ratio, &mut rng)
         }
-        Some(stratify_col) => {
-            // Group row indices by the stratification key, then split each group.
-            let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-            let keys = stratify_keys(dataset, stratify_col);
-            for (index, key) in keys.into_iter().enumerate() {
-                groups.entry(key).or_default().push(index);
-            }
-
-            let mut train_indices = Vec::new();
-            let mut test_indices = Vec::new();
-            for group in groups.values() {
-                let mut group_indices = group.clone();
-                let (group_train, group_test) =
-                    split_and_collect_indices(&mut group_indices, train_ratio, &mut rng);
-                train_indices.extend(group_train);
-                test_indices.extend(group_test);
-            }
-            (train_indices, test_indices)
-        }
+        Some(stratify_col) => stratified_split(dataset, train_ratio, stratify_col, &mut rng),
     };
 
     (

@@ -1,0 +1,22 @@
+learning_rate: 0.05
+epochs: 250
+batch_size: 16
+optimizer: sgd
+weight_decay: 0.0
+loss: categorical_cross_entropy
+
+input_layers:
+  - size: 30
+
+hidden_layers:
+  - size: 24
+    activation: sigmoid
+    initializer: xavier
+  - size: 12
+    activation: sigmoid
+    initializer: xavier
+
+output_layers:
+  - size: 2
+    activation: softmax
+    initializer: xavier

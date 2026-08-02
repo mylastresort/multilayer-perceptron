@@ -7,13 +7,15 @@ use crate::{
 
 /// A feedforward neural network composed of sequential layers.
 ///
-/// Stores the layer stack, learning rate, and feature normalization statistics
-/// (mean/std from training set) needed for consistent prediction.
+/// Stores the layer stack, learning rate, feature normalization statistics
+/// (mean/std from training set) needed for consistent prediction, and the loss
+/// function used during training (reused for evaluation at prediction time).
 pub struct Network {
     pub layers: Vec<Layer>,
     pub learning_rate: f64,
     pub feature_mean: Option<ndarray::Array1<f64>>,
     pub feature_std: Option<ndarray::Array1<f64>>,
+    pub loss: LossFunction,
 }
 
 /// Builder for constructing a [`Network`] with a fluent API.
@@ -24,36 +26,37 @@ pub struct NetworkBuilder {
     learning_rate: f64,
     feature_mean: Option<ndarray::Array1<f64>>,
     feature_std: Option<ndarray::Array1<f64>>,
+    loss: LossFunction,
 }
 
 pub trait AsInput2D<'a> {
-    fn as_input_view(self) -> ArrayView2<'a, f64>;
+    fn as_input_view(&self) -> ArrayView2<'a, f64>;
 }
 
 impl<'a> AsInput2D<'a> for ArrayView2<'a, f64> {
-    fn as_input_view(self) -> ArrayView2<'a, f64> {
-        self
+    fn as_input_view(&self) -> ArrayView2<'a, f64> {
+        *self
     }
 }
 
 impl<'a> AsInput2D<'a> for &'a Array2<f64> {
-    fn as_input_view(self) -> ArrayView2<'a, f64> {
+    fn as_input_view(&self) -> ArrayView2<'a, f64> {
         self.view()
     }
 }
 
 pub trait AsInput1D<'a> {
-    fn as_input_view(self) -> ArrayView1<'a, f64>;
+    fn as_input_view(&self) -> ArrayView1<'a, f64>;
 }
 
 impl<'a> AsInput1D<'a> for ArrayView1<'a, f64> {
-    fn as_input_view(self) -> ArrayView1<'a, f64> {
-        self
+    fn as_input_view(&self) -> ArrayView1<'a, f64> {
+        *self
     }
 }
 
 impl<'a> AsInput1D<'a> for &'a Array1<f64> {
-    fn as_input_view(self) -> ArrayView1<'a, f64> {
+    fn as_input_view(&self) -> ArrayView1<'a, f64> {
         self.view()
     }
 }
@@ -65,6 +68,7 @@ impl Default for NetworkBuilder {
             learning_rate: 0.01,
             feature_mean: None,
             feature_std: None,
+            loss: LossFunction::default(),
         }
     }
 }
@@ -80,6 +84,11 @@ impl NetworkBuilder {
         self
     }
 
+    pub fn loss(mut self, loss: LossFunction) -> Self {
+        self.loss = loss;
+        self
+    }
+
     pub fn build(self) -> Network {
         assert!(
             self.layers.len() >= 3,
@@ -92,13 +101,22 @@ impl NetworkBuilder {
             learning_rate: self.learning_rate,
             feature_mean: self.feature_mean,
             feature_std: self.feature_std,
+            loss: self.loss,
         }
     }
 }
 
+/// Hyperparameters for a [`Network`] training run.
+pub struct FitConfig {
+    pub batch_size: usize,
+    pub epochs: usize,
+    pub optimizer: OptimizerType,
+    pub loss_fn: LossFunction,
+}
+
 impl Network {
     /// Creates a new [`NetworkBuilder`] with default settings (lr=0.01, no layers).
-    pub fn new() -> NetworkBuilder {
+    pub fn builder() -> NetworkBuilder {
         NetworkBuilder::default()
     }
 
@@ -122,26 +140,14 @@ impl Network {
         input: IX,
         target: IY,
         validation_data: Option<(ArrayView2<'data, f64>, ArrayView1<'data, f64>)>,
-        batch_size: usize,
-        epochs: usize,
-        optimizer: OptimizerType,
-        loss_fn: LossFunction,
+        config: FitConfig,
     ) -> Metrics
     where
         IX: AsInput2D<'data>,
         IY: AsInput1D<'data>,
     {
         let mut no_callbacks: Vec<&mut dyn Callback> = Vec::new();
-        self.fit_with_callbacks(
-            input,
-            target,
-            validation_data,
-            batch_size,
-            epochs,
-            optimizer,
-            loss_fn,
-            &mut no_callbacks,
-        )
+        self.fit_with_callbacks(input, target, validation_data, config, &mut no_callbacks)
     }
 
     /// Trains the network with custom callbacks (e.g., early stopping, progress logging).
@@ -150,10 +156,7 @@ impl Network {
         input: IX,
         target: IY,
         validation_data: Option<(ArrayView2<'data, f64>, ArrayView1<'data, f64>)>,
-        batch_size: usize,
-        epochs: usize,
-        optimizer: OptimizerType,
-        loss_fn: LossFunction,
+        config: FitConfig,
         callbacks: &mut [&mut dyn Callback],
     ) -> Metrics
     where
@@ -161,10 +164,10 @@ impl Network {
         IY: AsInput1D<'data>,
     {
         let mut trainer = Trainer::new(
-            optimizer.create(self.learning_rate),
-            loss_fn,
-            batch_size,
-            epochs,
+            config.optimizer.create(self.learning_rate),
+            config.loss_fn,
+            config.batch_size,
+            config.epochs,
         );
 
         trainer.train(
@@ -195,7 +198,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "at least 2 hidden layers")]
     fn builder_rejects_less_than_two_hidden_layers() {
-        let _ = Network::new()
+        let _ = Network::builder()
             .add_layer(Layer::new(
                 30,
                 24,
@@ -213,7 +216,7 @@ mod tests {
 
     #[test]
     fn builder_accepts_two_hidden_layers_and_output() {
-        let network = Network::new()
+        let network = Network::builder()
             .add_layer(Layer::new(
                 30,
                 24,
@@ -239,7 +242,7 @@ mod tests {
 
     #[test]
     fn network_forward_output_shape_is_correct() {
-        let mut net = Network::new()
+        let mut net = Network::builder()
             .add_layer(Layer::new(
                 4,
                 8,
@@ -267,7 +270,7 @@ mod tests {
 
     #[test]
     fn network_predict_matches_forward() {
-        let mut net = Network::new()
+        let mut net = Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -296,7 +299,7 @@ mod tests {
 
     #[test]
     fn network_learning_rate_builder_sets_field() {
-        let net = Network::new()
+        let net = Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -325,7 +328,7 @@ mod tests {
         use crate::training::{loss::LossFunction, optimizer::OptimizerType};
         use ndarray::{Array1, Array2};
 
-        let mut net = Network::new()
+        let mut net = Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -353,10 +356,12 @@ mod tests {
             x.view(),
             y.view(),
             None,
-            4,
-            1,
-            OptimizerType::SGD,
-            LossFunction::BinaryCrossEntropy,
+            super::FitConfig {
+                batch_size: 4,
+                epochs: 1,
+                optimizer: OptimizerType::SGD,
+                loss_fn: LossFunction::BinaryCrossEntropy,
+            },
         );
         assert!(metrics.train_loss.is_finite());
     }
@@ -366,7 +371,7 @@ mod tests {
         use crate::training::{loss::LossFunction, optimizer::OptimizerType};
         use ndarray::{Array1, Array2};
 
-        let mut net = Network::new()
+        let mut net = Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -395,10 +400,12 @@ mod tests {
             x.view(),
             &y,
             None,
-            4,
-            1,
-            OptimizerType::SGD,
-            LossFunction::BinaryCrossEntropy,
+            super::FitConfig {
+                batch_size: 4,
+                epochs: 1,
+                optimizer: OptimizerType::SGD,
+                loss_fn: LossFunction::BinaryCrossEntropy,
+            },
         );
         assert!(metrics.train_loss.is_finite());
     }

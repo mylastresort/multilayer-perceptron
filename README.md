@@ -1,7 +1,7 @@
 # Multilayer Perceptron (Rust)
 
 Train and evaluate a configurable MLP from CSV data with YAML-based network/training config,
-live monitoring, early stopping, and metric history export.
+per-epoch metrics, static learning-curve PNGs, early stopping, and metric history export.
 
 [![Codecov](https://codecov.io/gh/mylastresort/multilayer-perceptron/graph/badge.svg?token=jmjvtSTUeJ)](https://codecov.io/gh/mylastresort/multilayer-perceptron)
 
@@ -10,12 +10,15 @@ live monitoring, early stopping, and metric history export.
 ```bash
 git clone https://github.com/mylastresort/multilayer-perceptron
 cd multilayer-perceptron
-cargo run
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--model-out models/model.json
 ```
 
 ## Prerequisites
 
-The live GUI monitor (`-g`) and the crate's plotting dependencies pull in
+The crate's plotting dependencies (used to render the learning-curve PNGs) pull in
 `fontconfig` and `freetype` through `yeslogic-fontconfig-sys`. Its build
 script calls `pkg-config` to find `fontconfig.pc` and **panics if it cannot
 locate it**, so install the native dev packages *before* building:
@@ -39,11 +42,10 @@ locate it**, so install the native dev packages *before* building:
 
 This repository ships a `.cargo/config.toml` that sets `PKG_CONFIG_PATH` to
 the Debian/Ubuntu multiarch pkg-config directories, so Ubuntu-style setups
-work out of the box (the value is harmless elsewhere). On Linux the GUI also
-requires an X11 display. If you still hit the `fontconfig.pc ... not found`
-panic on a machine where the packages *are* installed, your `pkg-config` is
-not searching that platform's prefix — add the right directory to
-`PKG_CONFIG_PATH` in `.cargo/config.toml`.
+work out of the box (the value is harmless elsewhere). If you still hit the
+`fontconfig.pc ... not found` panic on a machine where the packages *are*
+installed, your `pkg-config` is not searching that platform's prefix — add the
+right directory to `PKG_CONFIG_PATH` in `.cargo/config.toml`.
 
 ## Usage
 
@@ -53,16 +55,22 @@ Show all CLI options:
 cargo run -- --help
 ```
 
-Run with defaults (`data/data.csv` + `models/training_learning_curve.yaml`):
+Train with defaults (`data/data.csv` + `models/mandatory_sgd.yaml`):
 
 ```bash
-cargo run
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--model-out models/model.json
 ```
 
-Run with explicit dataset and config paths:
+`--dataset` and `--config` are required for `train` (no implicit default);
+`split` and `predict` fall back to `data/data.csv` when `--dataset` is omitted.
+
+Train with explicit dataset and config paths:
 
 ```bash
-cargo run -- \
+cargo run -- train \
 	--dataset /absolute/path/to/data.csv \
 	--config /absolute/path/to/config.yaml
 ```
@@ -70,28 +78,40 @@ cargo run -- \
 Print resolved config summary:
 
 ```bash
-cargo run -- --verbose
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--verbose
 ```
 
 Override config values from CLI:
 
 ```bash
-cargo run -- -l 0.02 -e 50 -b 16
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	-l 0.02 -e 50 -b 16
 ```
 
 ### Monitoring
 
-Monitor multiple metrics each epoch:
+Per-epoch training and validation metrics are printed to the console for every
+epoch, and after training a single learning-curve PNG is written to `reports/`.
+The filename embeds the YAML config name and a timestamp so each trained model
+gets its own image (e.g. `reports/learning_curves_mandatory_sgd_20260802-104713.png`),
+and the chart carries all curves of that model on one graph:
 
-```bash
-cargo run -- \
-	-M loss,accuracy,precision
-```
+- training and validation loss per epoch
+- training and validation accuracy per epoch
+- training and validation precision per epoch
 
 Enable early stopping (on by default; restores the best-epoch weights):
 
 ```bash
-cargo run -- train --model-out models/model.json
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--model-out models/model.json
 ```
 
 Early stopping is enabled by default with a patience of 60, so the saved model
@@ -99,46 +119,58 @@ is rolled back to the best epoch (`restore_best_weights`). Tune it explicitly:
 
 ```bash
 cargo run -- train \
-	--monitor-early-stopping \
-	-m loss \
-	--monitor-mode min \
-	-p 5 \
-	--monitor-min-delta 0.0001 \
-	-s 2
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--early-stopping \
+	--early-stop-metric loss \
+	--early-stop-mode min \
+	--early-stop-patience 5 \
+	--early-stop-min-delta 0.0001 \
+	--early-stop-start-epoch 2
 ```
 
 Disable it entirely (saves the final-epoch weights):
 
 ```bash
-cargo run -- train --no-early-stopping --model-out models/model.json
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
+	--no-early-stopping \
+	--model-out models/model.json
 ```
 
 Save training history JSON:
 
 ```bash
-cargo run -- \
+cargo run -- train \
+	--dataset data/data.csv \
+	--config models/mandatory_sgd.yaml \
 	--monitor-history-out reports/history.json
 ```
 
-### GUI Learning Curves
+## Scripts
 
-Open live GUI panels for monitored metrics:
+`scripts/train_model.sh` runs the full pipeline interactively: it prompts for a
+dataset (default `data/data.csv`) and a numbered config menu of every shipped
+model, then splits, trains and evaluates in one shot.
+
+Each shipped config also has its own dedicated script, so a single command
+trains and evaluates with that config and its bonus flags baked in:
+
+| Script | Config | Demonstrates |
+| --- | --- | --- |
+| `scripts/train_mandatory_sgd.sh` | `models/mandatory_sgd.yaml` | Mandatory SGD + categorical cross-entropy |
+| `scripts/train_bonus_adam.sh` | `models/bonus_adam.yaml` | Bonus: Adam optimizer + weight decay |
+| `scripts/train_bonus_early_stopping.sh` | `models/bonus_early_stopping.yaml` | Bonus: early stopping with best-epoch restore |
+| `scripts/train_bonus_history.sh` | `models/bonus_history.yaml` | Bonus: per-epoch history JSON + multi-metric curves |
+| `scripts/train_bonus_multiple_curves.sh` | `models/bonus_multiple_curves.yaml` | Bonus: monitors loss/accuracy/precision, multiple curves on one graph |
+| `scripts/train_bonus_precision.sh` | `models/bonus_precision.yaml` | Bonus: precision as the early-stopping metric |
+
+Override the dataset and model path via the `DATASET` and `MODEL_OUT`
+environment variables:
 
 ```bash
-cargo run -- -g -M loss,accuracy,precision
-```
-
-GUI controls:
-
-- Press `Space` to close the live window.
-
-Optional GUI sizing/refresh controls:
-
-```bash
-MLP_LIVE_PLOT_WIDTH=1600 \
-MLP_LIVE_PLOT_HEIGHT=1000 \
-MLP_LIVE_PLOT_DELAY_MS=10 \
-cargo run -- -g -M loss,accuracy,precision
+DATASET=data/data_test.csv MODEL_OUT=models/model.json ./scripts/train_bonus_multiple_curves.sh
 ```
 
 ## Documentation

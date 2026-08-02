@@ -1,1 +1,0 @@
-MLP_LIVE_PLOT=1 MLP_WRITE_PNG=0 cargo test --test training_learning_curve_test -- --nocapture

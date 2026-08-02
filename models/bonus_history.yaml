@@ -1,0 +1,26 @@
+# Bonus: per-epoch metric history + multiple learning curves.
+# The train subcommand exports the recorded history as JSON
+# (--monitor-history-out) and renders loss, accuracy and precision curves
+# together on one image, so the whole learning phase is evaluable.
+learning_rate: 0.001
+epochs: 250
+batch_size: 16
+optimizer: adam
+weight_decay: 0.5
+loss: categorical_cross_entropy
+
+input_layers:
+  - size: 30
+
+hidden_layers:
+  - size: 24
+    activation: sigmoid
+    initializer: xavier
+  - size: 12
+    activation: sigmoid
+    initializer: xavier
+
+output_layers:
+  - size: 2
+    activation: softmax
+    initializer: xavier

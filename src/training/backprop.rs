@@ -40,7 +40,7 @@ mod tests {
     use ndarray::{Array1, Array2, arr1, arr2};
 
     fn tiny_net() -> Network {
-        Network::new()
+        Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,
@@ -101,7 +101,7 @@ mod tests {
     /// numeric differentiation of the forward pass.
     #[test]
     fn softmax_output_backward_matches_finite_difference() {
-        let mut net = Network::new()
+        let mut net = Network::builder()
             .add_layer(Layer::new(
                 2,
                 4,

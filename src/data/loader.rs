@@ -12,6 +12,58 @@ pub struct Dataset {
     pub feature_names: Vec<String>,
 }
 
+type LoadResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+// Reads a CSV into a DataFrame, treating the first row as a header when
+// skiprows >= 1 and dropping any extra rows between the header and the data.
+fn read_dataframe(file_path: &str, skiprows: usize) -> LoadResult<DataFrame> {
+    let has_header = skiprows > 0;
+    let df = CsvReadOptions::default()
+        .with_has_header(has_header)
+        .try_into_reader_with_file_path(Some(file_path.into()))?
+        .finish()?;
+
+    if skiprows > 1 {
+        let drop_count = skiprows - 1;
+        let remaining = df.height().saturating_sub(drop_count);
+        Ok(df.slice(drop_count as i64, remaining))
+    } else {
+        Ok(df)
+    }
+}
+
+// Collects a single column as Vec<f64>:
+//   - String columns  → label-encode (integer index by sorted class order)
+//   - Numeric columns → cast to f64, fill nulls with f64::default()
+fn column_to_values(column: &Column) -> LoadResult<Vec<f64>> {
+    if column.dtype() == &DataType::String {
+        let str_ca = column.str()?;
+        let values: Vec<Option<&str>> = str_ca.iter().collect();
+        let mut classes: Vec<String> = values
+            .iter()
+            .filter_map(|opt_s| opt_s.filter(|s| !s.is_empty()).map(|s| s.to_string()))
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        Ok(values
+            .iter()
+            .map(|opt_s| match opt_s {
+                Some(s) if !s.is_empty() => {
+                    classes.iter().position(|c| c.as_str() == *s).unwrap() as f64
+                }
+                _ => f64::default(),
+            })
+            .collect())
+    } else {
+        Ok(column
+            .cast(&DataType::Float64)?
+            .f64()?
+            .iter()
+            .map(|opt| opt.unwrap_or_default())
+            .collect())
+    }
+}
+
 // Function to load the dataset from a CSV file - converts categorical features to integer-encoded
 // values using deterministic label encoding (sorted class order, independent of row order).
 pub fn load_dataset(
@@ -19,68 +71,15 @@ pub fn load_dataset(
     skiprows: usize,
     names: Vec<String>,
     label_col: usize,
-) -> Result<Dataset, Box<dyn std::error::Error>> {
-    // Treat the first row as a header when skiprows >= 1; skip any additional rows
-    // between the header and the first data row via slicing after load.
-    let has_header = skiprows > 0;
-
-    let df = CsvReadOptions::default()
-        .with_has_header(has_header)
-        .try_into_reader_with_file_path(Some(file_path.into()))?
-        .finish()?;
-
-    // Drop extra rows when skiprows > 1 (rows between header and data).
-    let df = if skiprows > 1 {
-        let drop_count = skiprows - 1;
-        let remaining = df.height().saturating_sub(drop_count);
-        df.slice(drop_count as i64, remaining)
-    } else {
-        df
-    };
-
+) -> LoadResult<Dataset> {
+    let df = read_dataframe(file_path, skiprows)?;
     let n_rows = df.height();
-    let n_cols = df.width();
 
-    // Collect each column as Vec<f64>:
-    //   - String columns   → label-encode (integer index by sorted class order)
-    //   - Numeric columns  → cast to f64, fill nulls with f64::default()
-    let col_names: Vec<String> = df
+    let columns: Vec<Vec<f64>> = df
         .get_column_names()
         .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut columns: Vec<Vec<f64>> = Vec::with_capacity(n_cols);
-    for col_name in &col_names {
-        let series = df.column(col_name.as_str())?;
-        let col_values: Vec<f64> = if series.dtype() == &DataType::String {
-            let str_ca = series.str()?;
-            let values: Vec<Option<&str>> = str_ca.into_iter().collect();
-            let mut classes: Vec<String> = values
-                .iter()
-                .filter_map(|opt_s| opt_s.filter(|s| !s.is_empty()).map(|s| s.to_string()))
-                .collect();
-            classes.sort_unstable();
-            classes.dedup();
-            values
-                .iter()
-                .map(|opt_s| match opt_s {
-                    Some(s) if !s.is_empty() => {
-                        classes.iter().position(|c| c.as_str() == *s).unwrap() as f64
-                    }
-                    _ => f64::default(),
-                })
-                .collect()
-        } else {
-            series
-                .cast(&DataType::Float64)?
-                .f64()?
-                .into_iter()
-                .map(|opt| opt.unwrap_or_default())
-                .collect()
-        };
-        columns.push(col_values);
-    }
+        .map(|col_name| column_to_values(df.column(col_name.as_str())?))
+        .collect::<LoadResult<_>>()?;
 
     // Extract labels and feature columns.
     let labels_vec: Vec<f64> = columns[label_col].clone();
