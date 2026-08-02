@@ -1,12 +1,8 @@
 use mlp::training::monitor::{MonitorMode, MonitoredMetric};
 
-/// Top-level command selected via the first positional argument.
 pub enum Subcommand {
-    /// Split the dataset into train/validation CSV files.
     Split,
-    /// Train the network and save the model to a file.
     Train,
-    /// Load a saved model and evaluate it with binary cross-entropy.
     Predict,
 }
 
@@ -15,20 +11,14 @@ pub struct CliArgs {
     pub dataset_path: String,
     pub config_path: String,
     pub verbose: bool,
-    /// Open the live learning-curve GUI (`--gui`).
-    #[allow(dead_code)] // advertised flag; GUI not yet implemented
+    #[allow(dead_code)]
     pub gui: bool,
     pub monitor_options: MonitorOptions,
     pub net_overrides: NetOverrides,
-    /// Output path for the saved model (used by `train`).
     pub model_out: Option<String>,
-    /// Path to a previously saved model (used by `predict`).
     pub model_in: Option<String>,
-    /// Fraction of the dataset used as the training split (used by `split`).
     pub split_ratio: f64,
-    /// Output CSV path for the training split (used by `split`).
     pub train_out: Option<String>,
-    /// Output CSV path for the validation split (used by `split`).
     pub val_out: Option<String>,
 }
 
@@ -40,15 +30,12 @@ pub struct MonitorOptions {
     pub early_stop_min_delta: f64,
     pub early_stop_start_epoch: usize,
     pub history_out: Option<String>,
-    /// Metrics selected via `--monitor-metrics` for history/plotting.
     pub metrics: Vec<MonitoredMetric>,
 }
 
 impl Default for MonitorOptions {
     fn default() -> Self {
         Self {
-            // Early stopping is on by default so `restore_best_weights` keeps the
-            // best-epoch model; --no-early-stopping still opts out.
             early_stopping: true,
             early_stop_metric: MonitoredMetric::Loss,
             early_stop_mode: MonitorMode::Min,

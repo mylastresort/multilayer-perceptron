@@ -1,18 +1,3 @@
-//! Model serialisation / deserialisation using JSON.
-//!
-//! Saved format (one JSON object):
-//! ```json
-//! {
-//!   "learning_rate": 0.01,
-//!   "layers": [
-//!     { "weights": [[…], …], "bias": […], "activation": "sigmoid" },
-//!     …
-//!   ]
-//! }
-//! ```
-//! The weight initialiser is **not** stored because weights are already
-//! initialised; only the learned values matter.
-
 use std::{error::Error, fs, path::Path};
 
 use ndarray::{Array1, Array2};
@@ -20,10 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::network::{activation::ActivationFunction, layer::Layer, model::Network};
 use crate::training::loss::LossFunction;
-
-// ---------------------------------------------------------------------------
-// On-disk representation
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize)]
 struct SavedLayer {
@@ -40,16 +21,9 @@ struct SavedNetwork {
     feature_mean: Option<Vec<f64>>,
     #[serde(default)]
     feature_std: Option<Vec<f64>>,
-    /// Loss function used for training; reused by the prediction program so
-    /// training and evaluation always agree. Defaults to CCE for models saved
-    /// before this field existed.
     #[serde(default)]
     loss: LossFunction,
 }
-
-// ---------------------------------------------------------------------------
-// Conversions
-// ---------------------------------------------------------------------------
 
 impl From<&Layer> for SavedLayer {
     fn from(layer: &Layer) -> Self {
@@ -84,7 +58,6 @@ impl TryFrom<SavedLayer> for Layer {
             .map_err(|e| format!("failed to restore weight matrix: {e}"))?;
         let bias = Array1::from(saved.bias);
 
-        // Use a no-op initialiser placeholder; weights are restored directly.
         use crate::network::initializer::WeightInitializer;
         let mut layer = Layer::new(rows, cols, saved.activation, WeightInitializer::He);
         layer.weights = weights;
@@ -93,12 +66,7 @@ impl TryFrom<SavedLayer> for Layer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API on Network
-// ---------------------------------------------------------------------------
-
 impl Network {
-    /// Serialise the network (topology + learned weights) to a JSON file.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
         let saved = SavedNetwork {
             learning_rate: self.learning_rate,
@@ -112,7 +80,6 @@ impl Network {
         Ok(())
     }
 
-    /// Deserialise a network previously saved with [`Network::save`].
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let json = fs::read_to_string(path)?;
         let saved: SavedNetwork = serde_json::from_str(&json)?;
@@ -197,7 +164,6 @@ mod tests {
 
     #[test]
     fn load_model_with_fewer_than_three_layers_returns_error() {
-        // Build a JSON with only 2 layers (bypassing Network builder)
         let json = serde_json::json!({
             "learning_rate": 0.01,
             "layers": [
@@ -244,7 +210,6 @@ mod tests {
 
     #[test]
     fn load_layer_with_mismatched_bias_length_returns_error() {
-        // First layer: weights are 2×2 (2 columns), but bias has 3 elements.
         let json = serde_json::json!({
             "learning_rate": 0.01,
             "layers": [

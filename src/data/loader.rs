@@ -1,21 +1,15 @@
 use ndarray::{Array1, Array2};
 use polars::prelude::*;
 
-// Dataset struct to hold the features, labels, and feature names
 #[derive(Debug, Clone, Default)]
 pub struct Dataset {
-    // 2D array for features (shape: [num_samples, num_features])
     pub features: Array2<f64>,
-    // 1D array for labels (shape: [num_samples])
     pub labels: Array1<f64>,
-    // Vector of feature names (length: num_features)
     pub feature_names: Vec<String>,
 }
 
 type LoadResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-// Reads a CSV into a DataFrame, treating the first row as a header when
-// skiprows >= 1 and dropping any extra rows between the header and the data.
 fn read_dataframe(file_path: &str, skiprows: usize) -> LoadResult<DataFrame> {
     let has_header = skiprows > 0;
     let df = CsvReadOptions::default()
@@ -32,9 +26,6 @@ fn read_dataframe(file_path: &str, skiprows: usize) -> LoadResult<DataFrame> {
     }
 }
 
-// Collects a single column as Vec<f64>:
-//   - String columns  → label-encode (integer index by sorted class order)
-//   - Numeric columns → cast to f64, fill nulls with f64::default()
 fn column_to_values(column: &Column) -> LoadResult<Vec<f64>> {
     if column.dtype() == &DataType::String {
         let str_ca = column.str()?;
@@ -64,8 +55,6 @@ fn column_to_values(column: &Column) -> LoadResult<Vec<f64>> {
     }
 }
 
-// Function to load the dataset from a CSV file - converts categorical features to integer-encoded
-// values using deterministic label encoding (sorted class order, independent of row order).
 pub fn load_dataset(
     file_path: &str,
     skiprows: usize,
@@ -81,7 +70,6 @@ pub fn load_dataset(
         .map(|col_name| column_to_values(df.column(col_name.as_str())?))
         .collect::<LoadResult<_>>()?;
 
-    // Extract labels and feature columns.
     let labels_vec: Vec<f64> = columns[label_col].clone();
     let feature_cols: Vec<&Vec<f64>> = columns
         .iter()
@@ -117,7 +105,6 @@ mod tests {
     fn load_dataset_from_data_csv() {
         let csv_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
 
-        // Build the same 32-column schema used by the dataset: 2 id/label + 10 features x 3 stats.
         let base_features = vec![
             "Radius",
             "Texture",
@@ -139,7 +126,6 @@ mod tests {
             }
         }
 
-        // Validate the generated schema length against the actual CSV data row width.
         let csv_contents = fs::read_to_string(&csv_path).expect("data/data.csv should be readable");
         let data_row = csv_contents
             .lines()
@@ -151,18 +137,14 @@ mod tests {
         let dataset =
             load_dataset(&csv_path, 0, names, 0).expect("loading data/data.csv should succeed");
 
-        // Compile-time type checks for the returned ndarray outputs.
         fn assert_types(_features: &Array2<f64>, _labels: &Array1<f64>) {}
         assert_types(&dataset.features, &dataset.labels);
 
-        // Sanity-check expected dimensions (no header row in data.csv).
         assert_eq!(dataset.labels.len(), 569);
         assert_eq!(dataset.features.nrows(), 569);
         assert_eq!(dataset.features.ncols(), 31);
         assert_eq!(dataset.feature_names.len(), 32);
 
-        // Diagnosis is categorical and should produce exactly two encoded classes.
-        // Encoding is deterministic (sorted): "B" → 0, "M" → 1.
         let mut diagnosis_classes: Vec<i64> = dataset
             .features
             .column(0)
@@ -174,7 +156,6 @@ mod tests {
         assert_eq!(diagnosis_classes.len(), 2);
         assert_eq!(diagnosis_classes, vec![0, 1]);
 
-        // Spot-check a few known values from the first data row.
         assert_eq!(dataset.labels[0], 842302.0);
         assert_eq!(dataset.features[[0, 0]], 1.0);
         assert!((dataset.features[[0, 1]] - 17.99).abs() < 1e-12);
@@ -192,7 +173,6 @@ mod tests {
             timestamp
         ));
 
-        // Row 3 has one extra cell, so data rows do not have a consistent column count.
         let csv = "ID,Diagnosis,Radius\n1,M,10.0\n2,B,11.0,extra\n";
         fs::write(&csv_path, csv).expect("temporary csv should be writable");
 
@@ -222,7 +202,6 @@ mod tests {
             timestamp
         ));
 
-        // Row 3 keeps the same column count but has an empty numeric value for Radius.
         let csv = "ID,Diagnosis,Radius,Texture\n1,M,10.0,2.5\n2,B,,3.5\n";
         fs::write(&csv_path, csv).expect("temporary csv should be writable");
 
@@ -238,7 +217,6 @@ mod tests {
 
         let _ = fs::remove_file(&csv_path);
 
-        // Features are: Diagnosis (encoded), Radius, Texture.
         assert_eq!(dataset.features.nrows(), 2);
         assert_eq!(dataset.features.ncols(), 3);
         assert_eq!(dataset.features[[1, 1]], f64::default());
@@ -253,7 +231,6 @@ mod tests {
         let csv_path =
             std::env::temp_dir().join(format!("mlp_skiprows_{}_{}.csv", process::id(), timestamp));
 
-        // First row = header, second row = extra row to skip, rows 3-4 = data.
         let csv = "A,B\nskip_this_row,999\n1.0,2.0\n3.0,4.0\n";
         fs::write(&csv_path, csv).expect("temporary csv should be writable");
 
@@ -269,7 +246,7 @@ mod tests {
         let _ = fs::remove_file(&csv_path);
 
         let dataset = result.expect("load with skiprows=2 should succeed");
-        // After skipping one extra row, only the 2 data rows should remain.
+
         assert_eq!(dataset.features.nrows(), 2);
     }
 
@@ -279,7 +256,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        // Same rows, different row order: label encoding must be order-invariant.
         let csv_m_first = "ID,Diagnosis,Value\n1,M,10.0\n2,B,11.0\n";
         let csv_b_first = "ID,Diagnosis,Value\n2,B,11.0\n1,M,10.0\n";
         let path_m =
@@ -289,13 +265,11 @@ mod tests {
         fs::write(&path_m, csv_m_first).expect("temp csv should be writable");
         fs::write(&path_b, csv_b_first).expect("temp csv should be writable");
 
-        // label_col = 0 → ID is the label, Diagnosis is the first feature column.
         let m = load_dataset(path_m.to_str().unwrap(), 1, Vec::new(), 0).unwrap();
         let b = load_dataset(path_b.to_str().unwrap(), 1, Vec::new(), 0).unwrap();
         let _ = fs::remove_file(&path_m);
         let _ = fs::remove_file(&path_b);
 
-        // Deterministic sorted encoding: "B" → 0, "M" → 1, regardless of row order.
         assert_eq!(m.features[[0, 0]], 1.0, "M row in M-first file");
         assert_eq!(m.features[[1, 0]], 0.0, "B row in M-first file");
         assert_eq!(b.features[[0, 0]], 0.0, "B row in B-first file");
@@ -313,7 +287,6 @@ mod tests {
             process::id(),
             timestamp
         ));
-        // Row 2 has an empty Diagnosis field — hits the `_ => f64::default()` catch-all arm.
         let csv = "ID,Diagnosis,Value\n1,M,10.0\n2,,11.0\n";
         fs::write(&csv_path, csv).expect("temporary csv should be writable");
         let result = load_dataset(

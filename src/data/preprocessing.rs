@@ -1,27 +1,23 @@
 use ndarray::{Array1, Array2};
 
-// This module contains data preprocessing utilities, such as normalization and standardization.
 pub trait Normalizer {
     fn fit(&mut self, data: &Array2<f64>);
     fn transform(&self, data: &Array2<f64>) -> Array2<f64>;
     fn fit_transform(&mut self, data: &Array2<f64>) -> Array2<f64>;
 }
 
-// z-score normalization (standardization)
 #[derive(Debug, Clone, Default)]
 pub struct StandardScaler {
     mean: Array1<f64>,
     std: Array1<f64>,
 }
 
-// min-max normalization
 #[derive(Debug, Clone, Default)]
 pub struct MinMaxScaler {
     min: Array1<f64>,
     max: Array1<f64>,
 }
 
-// implementations of the Normalizer trait for both scalers
 impl Normalizer for StandardScaler {
     fn fit(&mut self, data: &Array2<f64>) {
         self.mean = data.mean_axis(ndarray::Axis(0)).unwrap();
@@ -29,7 +25,6 @@ impl Normalizer for StandardScaler {
     }
 
     fn transform(&self, data: &Array2<f64>) -> Array2<f64> {
-        // (x - u) / s
         (data - &self.mean) / &self.std
     }
 
@@ -39,7 +34,6 @@ impl Normalizer for StandardScaler {
     }
 }
 
-// implementations of the Normalizer trait for MinMaxScaler
 impl Normalizer for MinMaxScaler {
     fn fit(&mut self, data: &Array2<f64>) {
         self.min = data.fold_axis(ndarray::Axis(0), f64::INFINITY, |&a, &b| a.min(b));
@@ -47,7 +41,6 @@ impl Normalizer for MinMaxScaler {
     }
 
     fn transform(&self, data: &Array2<f64>) -> Array2<f64> {
-        // (x - min) / (max - min)
         (data - &self.min) / (&self.max - &self.min)
     }
 
@@ -90,7 +83,6 @@ mod tests {
 
         let transformed = scaler.fit_transform(&data);
 
-        // For each column: mean = 0 and std = 1 after z-score normalization.
         let col_means = transformed
             .mean_axis(ndarray::Axis(0))
             .expect("mean along axis should exist");
@@ -186,11 +178,9 @@ mod tests {
         let mut scaler = StandardScaler::default();
         let scaled = scaler.fit_transform(&dataset.features);
 
-        // Scaling should preserve shape and produce finite numeric outputs.
         assert_eq!(scaled.dim(), dataset.features.dim());
         assert!(scaled.iter().all(|v| v.is_finite()));
 
-        // At least one feature should be centered near zero.
         let col_means = scaled
             .mean_axis(ndarray::Axis(0))
             .expect("mean along axis should exist");

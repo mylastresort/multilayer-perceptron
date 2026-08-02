@@ -1,5 +1,3 @@
-//! Neural network core: layers, activations, weight initialization, model persistence, and callbacks.
-
 pub mod activation;
 pub mod callbacks;
 pub mod config;

@@ -9,8 +9,6 @@ pub struct BatchIterator<'data, 'idx> {
 }
 
 impl<'data, 'idx> BatchIterator<'data, 'idx> {
-    /// Yields the next group of `batch_size` samples (the last group may be smaller),
-    /// gathered from the shuffled `indices` into owned arrays.
     pub fn next_batch(&mut self) -> Option<(Array2<f64>, Array1<f64>)> {
         if self.batch_start >= self.indices.len() {
             return None;
@@ -90,7 +88,6 @@ mod tests {
         let (first, y_first) = iter.next_batch().unwrap();
         assert_eq!(first.dim(), (2, 2));
         assert_eq!(y_first.len(), 2);
-        // Rows 0 and 1 → [[0,1],[2,3]], labels [0, 1].
         assert_eq!(first[[0, 0]], 0.0);
         assert_eq!(first[[1, 1]], 3.0);
         assert_eq!(y_first[0], 0.0);
@@ -111,7 +108,7 @@ mod tests {
         let indices: Vec<usize> = (0..4).collect();
         let mut iter = create_batches(x.view(), y.view(), &indices, 2);
         let total = iter.sum_by(|x_batch, _y| x_batch.nrows() as f64);
-        assert_eq!(total, 4.0); // 2 batches × 2 rows
+        assert_eq!(total, 4.0);
     }
 
     #[test]
@@ -123,7 +120,7 @@ mod tests {
         while iter.next_batch().is_some() {
             count += 1;
         }
-        assert_eq!(count, 1); // the whole dataset is a single (partial) batch
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -148,13 +145,13 @@ mod tests {
     #[test]
     fn batch_iterator_respects_shuffled_indices() {
         let (x, y) = data_4x2();
-        // Reverse order: rows 3,2 then 1,0.
+
         let indices: Vec<usize> = (0..4).rev().collect();
         let mut iter = create_batches(x.view(), y.view(), &indices, 2);
 
         let (first, y_first) = iter.next_batch().unwrap();
-        assert_eq!(first[[0, 0]], 6.0); // row 3
-        assert_eq!(first[[1, 0]], 4.0); // row 2
+        assert_eq!(first[[0, 0]], 6.0);
+        assert_eq!(first[[1, 0]], 4.0);
         assert_eq!(y_first[0], 1.0);
         assert_eq!(y_first[1], 0.0);
     }

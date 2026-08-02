@@ -5,13 +5,10 @@ use crate::network::{
     initializer::WeightInitializer,
 };
 
-// Defines the Layer struct, which represents a single layer in the neural network,
-// including its weights, bias, activation function, and caches for backpropagation.
 pub struct Layer {
     pub weights: Array2<f64>,
     pub bias: Array1<f64>,
     pub activation: ActivationFunction,
-    // Cache for backpropagation
     pub input_cache: Option<Array2<f64>>,
     pub weighted_sum_cache: Option<Array2<f64>>,
 }
@@ -34,7 +31,6 @@ impl Layer {
         }
     }
 
-    // Performs the forward pass through the layer.
     pub fn forward(&mut self, _input: ArrayView2<'_, f64>) -> Array2<f64> {
         let weighted_sum = _input.dot(&self.weights) + &self.bias;
         self.input_cache = Some(_input.to_owned());
@@ -42,7 +38,6 @@ impl Layer {
         self.activation.forward(&weighted_sum)
     }
 
-    // Performs the backward pass through the layer, calculating gradients for weights, bias, and input.
     pub fn backward(&self, upstream: &Array2<f64>) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
         let weighted_sum = self
             .weighted_sum_cache
@@ -67,7 +62,6 @@ mod tests {
 
     fn simple_layer() -> Layer {
         let mut layer = Layer::new(2, 3, ActivationFunction::Sigmoid, WeightInitializer::He);
-        // Set deterministic weights so shapes are predictable
         layer.weights = arr2(&[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
         layer.bias = ndarray::Array1::from(vec![0.0, 0.0, 0.0]);
         layer
@@ -104,12 +98,12 @@ mod tests {
     fn layer_backward_gradient_shapes_are_correct() {
         let mut layer = simple_layer();
         let input = arr2(&[[1.0, 2.0]]);
-        let _ = layer.forward(input.view()); // populate cache
+        let _ = layer.forward(input.view());
         let grad_output = arr2(&[[0.1, 0.2, 0.3]]);
         let (grad_input, grad_weights, grad_bias) = layer.backward(&grad_output);
-        assert_eq!(grad_input.dim(), (1, 2)); // same as input
-        assert_eq!(grad_weights.dim(), (2, 3)); // same as weights
-        assert_eq!(grad_bias.len(), 3); // same as bias
+        assert_eq!(grad_input.dim(), (1, 2));
+        assert_eq!(grad_weights.dim(), (2, 3));
+        assert_eq!(grad_bias.len(), 3);
     }
 
     #[test]

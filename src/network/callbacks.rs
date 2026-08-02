@@ -1,7 +1,6 @@
 use crate::console::{Tone, bold, paint};
 use crate::network::model::Network;
 
-/// Aggregated metric values passed to callbacks at epoch/batch boundaries.
 #[derive(Debug, Clone, Default)]
 pub struct CallbackLogs {
     pub loss: Option<f64>,
@@ -12,7 +11,6 @@ pub struct CallbackLogs {
     pub val_precision: Option<f64>,
 }
 
-/// Prints epoch metrics to the console in a Keras-style format.
 pub struct ProgressLogger {
     total_epochs: usize,
 }
@@ -57,9 +55,6 @@ impl Callback for ProgressLogger {
     }
 }
 
-/// Keras-style callback trait for train/eval/predict lifecycle hooks.
-///
-/// Implement [`Callback::should_stop`] to support early stopping.
 pub trait Callback {
     fn on_train_begin(&mut self) {}
     fn on_train_end(&mut self) {}
@@ -67,8 +62,6 @@ pub trait Callback {
     fn on_epoch_begin(&mut self, _epoch: usize) {}
     fn on_epoch_end(&mut self, _epoch: usize, _logs: Option<&CallbackLogs>) {}
 
-    /// Called at the end of each epoch with mutable access to the network so
-    /// callbacks (e.g. early stopping) can snapshot or restore model weights.
     fn on_epoch_end_network(
         &mut self,
         _epoch: usize,
@@ -86,7 +79,6 @@ pub trait Callback {
     fn on_test_begin(&mut self) {}
     fn on_test_end(&mut self) {}
 
-    // Allows callbacks like EarlyStopping to request stopping the training loop.
     fn should_stop(&self) -> bool {
         false
     }
@@ -107,7 +99,6 @@ mod tests {
             precision: Some(0.75),
             val_precision: Some(0.78),
         };
-        // Should not panic, just print
         logger.on_epoch_end(4, Some(&logs));
     }
 

@@ -1,5 +1,5 @@
-use plotters::coord::types::{RangedCoordf64, RangedCoordi32};
 use plotters::coord::Shift;
+use plotters::coord::types::{RangedCoordf64, RangedCoordi32};
 use plotters::prelude::*;
 
 use crate::training::monitor::MonitoredMetric;
@@ -56,10 +56,7 @@ fn draw_single_curve(
     Ok(())
 }
 
-pub fn plot_loss_curve(
-    history: &TrainingHistory,
-    output_path: &str,
-) -> PlotResult {
+pub fn plot_loss_curve(history: &TrainingHistory, output_path: &str) -> PlotResult {
     if history.train_loss.is_empty() {
         return Err("train_loss cannot be empty".into());
     }
@@ -86,10 +83,7 @@ pub fn plot_loss_curve(
     Ok(())
 }
 
-pub fn plot_accuracy_curve(
-    history: &TrainingHistory,
-    output_path: &str,
-) -> PlotResult {
+pub fn plot_accuracy_curve(history: &TrainingHistory, output_path: &str) -> PlotResult {
     if history.train_accuracy.is_empty() {
         return Err("train_accuracy cannot be empty".into());
     }
@@ -138,8 +132,6 @@ fn draw_metric_series(
     Ok(())
 }
 
-/// A single stacked panel of a learning-curve figure: one training/validation
-/// pair of series drawn for one metric.
 #[allow(clippy::too_many_arguments)]
 fn draw_metric_panel(
     area: &DrawingArea<BitMapBackend, Shift>,
@@ -370,9 +362,6 @@ fn draw_panel_grid(
     Ok(())
 }
 
-/// Multi-panel figure with all learning curves for one model: one graph per
-/// monitored metric (loss, accuracy, precision), arranged in a grid matrix on a
-/// single image. When `metrics` is empty, every metric is plotted.
 pub fn plot_training_curves(
     history: &TrainingHistory,
     output_path: &str,
@@ -507,13 +496,12 @@ mod tests {
     #[test]
     fn plot_training_curves_honors_metric_selection() {
         let history = history_with_metrics();
-        let path = format!("/tmp/mlp_test_plot_ok_curves_prec_{}.png", std::process::id());
-        plot_training_curves(
-            &history,
-            &path,
-            &[MonitoredMetric::Precision],
-        )
-        .expect("precision-only curves should save");
+        let path = format!(
+            "/tmp/mlp_test_plot_ok_curves_prec_{}.png",
+            std::process::id()
+        );
+        plot_training_curves(&history, &path, &[MonitoredMetric::Precision])
+            .expect("precision-only curves should save");
         assert!(std::path::Path::new(&path).exists());
         let _ = std::fs::remove_file(&path);
     }

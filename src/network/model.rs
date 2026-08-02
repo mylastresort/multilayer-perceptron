@@ -5,11 +5,6 @@ use crate::{
     training::{loss::LossFunction, metrics::Metrics, optimizer::OptimizerType, trainer::Trainer},
 };
 
-/// A feedforward neural network composed of sequential layers.
-///
-/// Stores the layer stack, learning rate, feature normalization statistics
-/// (mean/std from training set) needed for consistent prediction, and the loss
-/// function used during training (reused for evaluation at prediction time).
 pub struct Network {
     pub layers: Vec<Layer>,
     pub learning_rate: f64,
@@ -18,9 +13,6 @@ pub struct Network {
     pub loss: LossFunction,
 }
 
-/// Builder for constructing a [`Network`] with a fluent API.
-///
-/// Enforces a minimum of 3 layers (2 hidden + 1 output) at build time.
 pub struct NetworkBuilder {
     layers: Vec<Layer>,
     learning_rate: f64,
@@ -106,7 +98,6 @@ impl NetworkBuilder {
     }
 }
 
-/// Hyperparameters for a [`Network`] training run.
 pub struct FitConfig {
     pub batch_size: usize,
     pub epochs: usize,
@@ -115,12 +106,10 @@ pub struct FitConfig {
 }
 
 impl Network {
-    /// Creates a new [`NetworkBuilder`] with default settings (lr=0.01, no layers).
     pub fn builder() -> NetworkBuilder {
         NetworkBuilder::default()
     }
 
-    /// Performs a forward pass through all layers, returning the network output.
     pub fn forward<'a, I>(&mut self, input: I) -> Array2<f64>
     where
         I: AsInput2D<'a>,
@@ -132,9 +121,6 @@ impl Network {
         output
     }
 
-    /// Trains the network on the given data for the specified number of epochs.
-    ///
-    /// Returns [`Metrics`] containing final train (and optional validation) scores.
     pub fn fit<'data, IX, IY>(
         &mut self,
         input: IX,
@@ -150,7 +136,6 @@ impl Network {
         self.fit_with_callbacks(input, target, validation_data, config, &mut no_callbacks)
     }
 
-    /// Trains the network with custom callbacks (e.g., early stopping, progress logging).
     pub fn fit_with_callbacks<'data, IX, IY>(
         &mut self,
         input: IX,
@@ -179,7 +164,6 @@ impl Network {
         )
     }
 
-    /// Runs inference (alias for [`Network::forward`]).
     pub fn predict<'a, I>(&mut self, input: I) -> Array2<f64>
     where
         I: AsInput2D<'a>,
@@ -395,7 +379,6 @@ mod tests {
         let x = Array2::from_shape_fn((8, 2), |(i, j)| (i + j) as f64 * 0.1);
         let y = Array1::from_vec(vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
 
-        // Pass &y (reference to Array1) to exercise the AsInput1D impl for &'a Array1<f64>.
         let metrics = net.fit(
             x.view(),
             &y,
