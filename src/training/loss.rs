@@ -1,11 +1,6 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use serde::{Deserialize, Serialize};
 
-/// Supported loss functions for training.
-///
-/// `CategoricalCrossEntropy` is the default: for the 2-class breast-cancer
-/// problem it is equivalent to binary cross-entropy (BCE with one-hot targets),
-/// which is why training and prediction share the same loss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LossFunction {
@@ -26,7 +21,6 @@ pub enum LossFunction {
 }
 
 impl LossFunction {
-    /// Human-readable lowercase identifier, used for CLI errors and display.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MSE => "mse",
@@ -35,8 +29,6 @@ impl LossFunction {
         }
     }
 
-    /// Parses a loss name from the CLI, accepting the spellings used by the
-    /// subject and Keras-style conventions.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "mse" => Some(Self::MSE),
@@ -52,19 +44,12 @@ impl LossFunction {
     }
 }
 
-/// Trait for loss functions, providing per-sample loss and gradient computation.
-///
-/// Neither `compute` nor `gradient` reduce over the batch: both return one
-/// value per sample. Reducing to a scalar (mean or sum) is a training concern
-/// and is handled by the caller (e.g. the trainer).
 pub trait Loss {
-    /// Computes the per-sample loss for each sample in the batch.
     fn compute(
         &self,
         predictions: ArrayView2<'_, f64>,
         targets: ArrayView1<'_, f64>,
     ) -> Array1<f64>;
-    /// Computes the per-sample gradient of the loss with respect to predictions.
     fn gradient(
         &self,
         predictions: ArrayView2<'_, f64>,
@@ -83,9 +68,7 @@ fn assert_shape_match(predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, 
 }
 
 fn class_index(target: f64, n_classes: usize) -> usize {
-    target
-        .round()
-        .clamp(0.0, (n_classes - 1) as f64) as usize
+    target.round().clamp(0.0, (n_classes - 1) as f64) as usize
 }
 
 fn mse_loss(predictions: ArrayView2<'_, f64>, targets: ArrayView1<'_, f64>) -> Array1<f64> {
@@ -223,10 +206,6 @@ mod tests {
     use super::{Loss, LossFunction};
     use ndarray::{arr1, arr2};
 
-    // -----------------------------------------------------------------------
-    // LossFunction naming / parsing
-    // -----------------------------------------------------------------------
-
     #[test]
     fn loss_function_parse_accepts_common_spellings() {
         assert_eq!(LossFunction::parse("mse"), Some(LossFunction::MSE));
@@ -264,16 +243,11 @@ mod tests {
             let back: LossFunction = serde_json::from_str(&json).unwrap();
             assert_eq!(loss, back, "serde round-trip failed for {json}");
         }
-        // Default is categorical cross-entropy (the 2-class BCE-equivalent).
         assert_eq!(
             LossFunction::default(),
             LossFunction::CategoricalCrossEntropy
         );
     }
-
-    // -----------------------------------------------------------------------
-    // MSE
-    // -----------------------------------------------------------------------
 
     #[test]
     fn mse_compute_zero_when_predictions_equal_targets() {
@@ -287,7 +261,6 @@ mod tests {
 
     #[test]
     fn mse_compute_correct_value() {
-        // predictions = [[2.0]], targets = [0.0]  → per-sample MSE = (2-0)^2 / 1 = 4.0
         let preds = arr2(&[[2.0]]);
         let targets = arr1(&[0.0]);
         let losses = LossFunction::MSE.compute(preds.view(), targets.view());
@@ -315,7 +288,6 @@ mod tests {
 
     #[test]
     fn mse_gradient_correct_sign() {
-        // pred > target → gradient should be positive
         let preds = arr2(&[[3.0]]);
         let targets = arr1(&[1.0]);
         let grad = LossFunction::MSE.gradient(preds.view(), targets.view());
@@ -330,13 +302,8 @@ mod tests {
         LossFunction::MSE.compute(preds.view(), targets.view());
     }
 
-    // -----------------------------------------------------------------------
-    // BinaryCrossEntropy – single column
-    // -----------------------------------------------------------------------
-
     #[test]
     fn bce_single_col_compute_near_zero_for_perfect_predictions() {
-        // p ≈ 1 for y=1 → loss ≈ 0
         let preds = arr2(&[[0.999_999]]);
         let targets = arr1(&[1.0]);
         let losses = LossFunction::BinaryCrossEntropy.compute(preds.view(), targets.view());
@@ -349,7 +316,6 @@ mod tests {
 
     #[test]
     fn bce_single_col_gradient_direction_for_overestimate() {
-        // p > y → gradient should be positive
         let preds = arr2(&[[0.9]]);
         let targets = arr1(&[0.0]);
         let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
@@ -358,16 +324,11 @@ mod tests {
 
     #[test]
     fn bce_single_col_gradient_direction_for_underestimate() {
-        // p < y → gradient should be negative
         let preds = arr2(&[[0.1]]);
         let targets = arr1(&[1.0]);
         let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
         assert!(grad[[0, 0]] < 0.0);
     }
-
-    // -----------------------------------------------------------------------
-    // BinaryCrossEntropy – multi column (one-hot style)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn bce_multi_col_compute_finite_for_valid_predictions() {
@@ -385,10 +346,6 @@ mod tests {
         let grad = LossFunction::BinaryCrossEntropy.gradient(preds.view(), targets.view());
         assert_eq!(grad.dim(), preds.dim());
     }
-
-    // -----------------------------------------------------------------------
-    // CategoricalCrossEntropy
-    // -----------------------------------------------------------------------
 
     #[test]
     fn cce_compute_finite_for_valid_predictions() {
@@ -409,11 +366,9 @@ mod tests {
 
     #[test]
     fn cce_gradient_subtracts_one_from_true_class() {
-        // Single sample; class 1 is true → grad[0][1] should be reduced
         let preds = arr2(&[[0.2, 0.5, 0.3]]);
         let targets = arr1(&[1.0]);
         let grad = LossFunction::CategoricalCrossEntropy.gradient(preds.view(), targets.view());
-        // grad[0][1] = 0.5 - 1.0 = -0.5
         assert!((grad[[0, 1]] - (-0.5)).abs() < 1e-12);
     }
 

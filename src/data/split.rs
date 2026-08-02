@@ -65,7 +65,6 @@ fn rng_from_seed(seed: Option<u64>) -> StdRng {
     }
 }
 
-// Groups row indices by the stratification key, then splits each group.
 fn stratified_split<R: Rng + ?Sized>(
     dataset: &Dataset,
     train_ratio: f64,
@@ -82,14 +81,14 @@ fn stratified_split<R: Rng + ?Sized>(
     let mut test_indices = Vec::new();
     for group in groups.values() {
         let mut group_indices = group.clone();
-        let (group_train, group_test) = split_and_collect_indices(&mut group_indices, train_ratio, rng);
+        let (group_train, group_test) =
+            split_and_collect_indices(&mut group_indices, train_ratio, rng);
         train_indices.extend(group_train);
         test_indices.extend(group_test);
     }
     (train_indices, test_indices)
 }
 
-// Implements stratified train-test split for datasets.
 pub fn train_test_split(
     dataset: &Dataset,
     train_ratio: f64,
@@ -290,7 +289,6 @@ mod tests {
         let (train, test) = train_test_split(&dataset, 0.75, Some(42), Some("label"));
         assert_eq!(train.features.nrows() + test.features.nrows(), 8);
 
-        // Both classes should appear in the training set
         let train_labels: std::collections::HashSet<i64> =
             train.labels.iter().map(|v| *v as i64).collect();
         assert!(train_labels.contains(&0));
@@ -321,9 +319,6 @@ mod tests {
 
     #[test]
     fn stratified_split_uses_adjusted_column_index_when_names_exceed_ncols() {
-        // feature_names has 3 entries but features has only 2 columns.
-        // "extra" is at position 2 in feature_names; col_index(2) >= ncols(2)
-        // triggers the else-branch: adjusted_index = col_index.checked_sub(1) = 1.
         let dataset = build_dataset(
             array![[0.0, 10.0], [0.0, 11.0], [1.0, 20.0], [1.0, 21.0]],
             vec![0.0, 0.0, 1.0, 1.0],

@@ -26,6 +26,3 @@ clean:
 	cargo clean
 	rm -rf reports/ models/model.json
 	rm -f data/train.csv data/val.csv data/data_training.csv data/data_test.csv
-
-doc:
-	PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig cargo doc --no-deps --open

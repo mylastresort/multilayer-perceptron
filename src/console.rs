@@ -15,13 +15,13 @@ fn colors_enabled() -> bool {
 
 fn code(tone: Tone) -> &'static str {
     match tone {
-        Tone::Info => "34",        // Blue
-        Tone::Success => "32",     // Green
-        Tone::Warn => "33",        // Yellow
-        Tone::Accent => "36",      // Cyan
-        Tone::Muted => "90",       // Bright black / gray
-        Tone::TrainMetric => "32", // Green
-        Tone::ValMetric => "35",   // Magenta
+        Tone::Info => "34",
+        Tone::Success => "32",
+        Tone::Warn => "33",
+        Tone::Accent => "36",
+        Tone::Muted => "90",
+        Tone::TrainMetric => "32",
+        Tone::ValMetric => "35",
     }
 }
 
@@ -44,7 +44,6 @@ mod tests {
     use super::{Tone, bold, paint};
     use std::sync::Mutex;
 
-    // All tests that touch NO_COLOR must hold this lock to prevent races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]

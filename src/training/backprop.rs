@@ -75,7 +75,7 @@ mod tests {
     fn backward_returns_one_gradient_per_layer() {
         let mut net = tiny_net();
         let input = arr2(&[[0.5, 0.3]]);
-        let _ = net.forward(input.view()); // populate caches
+        let _ = net.forward(input.view());
         let loss_grad = Array2::ones((1, 1));
         let grads = net.backward(loss_grad);
         assert_eq!(grads.len(), net.layers.len());
@@ -94,11 +94,6 @@ mod tests {
         }
     }
 
-    /// Numeric gradient check (finite differences) for a softmax-output network
-    /// trained with categorical cross-entropy. This is the regression test for
-    /// the double-counted softmax derivative: the CE gradient already accounts
-    /// for the softmax derivative, so the analytic backward must match a pure
-    /// numeric differentiation of the forward pass.
     #[test]
     fn softmax_output_backward_matches_finite_difference() {
         let mut net = Network::builder()

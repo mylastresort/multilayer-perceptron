@@ -9,17 +9,12 @@ pub struct SplitArgs {
     pub dataset_path: String,
     pub train_out: String,
     pub val_out: String,
-    /// Fraction of rows assigned to the training split (0 < ratio < 1).
     pub ratio: f64,
 }
 
-/// Write a `Dataset` slice as CSV in the same layout `load_dataset` produced it:
-/// the label column first, then the feature columns. This mirrors the input file
-/// layout that `build_dataset` reads back, so the written files round-trip cleanly.
 fn write_csv(dataset: &Dataset, path: &str) -> Result<(), Box<dyn Error>> {
     let mut file = std::fs::File::create(path)?;
 
-    // Header: feature names cover every column (label column included first).
     let header: Vec<&str> = dataset.feature_names.iter().map(String::as_str).collect();
     writeln!(file, "{}", header.join(","))?;
 
@@ -116,9 +111,6 @@ mod tests {
             ratio: 0.8,
         });
 
-        // Regression check: the written CSVs must have matching header and data
-        // column counts, otherwise loading them back pads columns with nulls and
-        // the feature count no longer matches the trained model.
         let header_cols = std::fs::read_to_string(&train_path)
             .unwrap()
             .lines()
@@ -152,7 +144,6 @@ mod tests {
             .unwrap()
             .as_nanos();
         let csv_path = format!("/tmp/mlp_tiny_{}_{}.csv", std::process::id(), ts);
-        // A CSV with exactly 1 data row (+ header) — n < 2 triggers line 46.
         std::fs::write(&csv_path, "id,diagnosis,f1\n1,M,0.5\n").unwrap();
         let result = run_split(&SplitArgs {
             dataset_path: csv_path.clone(),

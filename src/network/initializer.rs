@@ -2,7 +2,6 @@ use ndarray::Array2;
 use ndarray_rand::{RandomExt, rand::distr::StandardUniform, rand_distr::Uniform};
 use serde::Deserialize;
 
-/// Weight initialization strategies for network layers.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WeightInitializer {
@@ -11,9 +10,7 @@ pub enum WeightInitializer {
     He,
 }
 
-// Implementation of the weight initialization methods
 impl WeightInitializer {
-    /// Creates a weight matrix of the given shape using the selected initialization method.
     pub fn initialize(&self, rows: usize, cols: usize) -> Array2<f64> {
         match self {
             WeightInitializer::Random => Array2::random((rows, cols), StandardUniform),

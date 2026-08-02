@@ -38,7 +38,6 @@ pub fn build_dataset(dataset_path: &str) -> Result<Dataset, Box<dyn Error>> {
         }
     }
 
-    // Keep loader defaults aligned with training_learning_curve_test.
     load_dataset(dataset_path, 1, names, 0)
 }
 
@@ -51,11 +50,7 @@ struct PreparedData {
     train_std: Array1<f64>,
 }
 
-fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
-    let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
-    let y = dataset.features.column(0).mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
-
-    let n = x_raw.nrows();
+fn training_split_index(n: usize) -> Result<usize, Box<dyn Error>> {
     if n < 3 {
         return Err("dataset must contain at least 3 rows to split train/val/test".into());
     }
@@ -64,6 +59,18 @@ fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Erro
     if train_end == 0 || n <= train_end {
         return Err("dataset split produced empty training or validation set".into());
     }
+    Ok(train_end)
+}
+
+fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
+    let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
+    let y = dataset
+        .features
+        .column(0)
+        .mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
+
+    let train_end = training_split_index(x_raw.nrows())?;
+    let n = x_raw.nrows();
 
     let x_train_raw = x_raw.slice(s![0..train_end, ..]).to_owned();
     let x_val_raw = x_raw.slice(s![train_end..n, ..]).to_owned();
@@ -167,7 +174,10 @@ fn print_training_summary(
             paint("Early stopping triggered at epoch", Tone::Warn),
             paint(&(stopped_epoch + 1).to_string(), Tone::Warn),
             paint(
-                &format!("(monitored: {})", monitor_options.early_stop_metric.as_str()),
+                &format!(
+                    "(monitored: {})",
+                    monitor_options.early_stop_metric.as_str()
+                ),
                 Tone::Warn
             )
         );
@@ -252,7 +262,10 @@ fn fit_network(
         mlp::network::model::FitConfig {
             batch_size: network_config.batch_size,
             epochs: network_config.epochs,
-            optimizer: OptimizerType::for_kind(network_config.optimizer, network_config.weight_decay),
+            optimizer: OptimizerType::for_kind(
+                network_config.optimizer,
+                network_config.weight_decay,
+            ),
             loss_fn: network_config.loss,
         },
         callbacks,
@@ -301,18 +314,11 @@ pub fn train_from_dataset(
     let metrics = fit_network(&mut network, &data, network_config, &mut callbacks);
     drop(callbacks);
 
-    // Keras `restore_best_weights`: when early stopping is enabled the weights
-    // are rolled back to the best monitored epoch, so the saved model is the
-    // best one rather than the last epoch's. No-op when early stopping is off.
     early_stopping.restore_best(&mut network);
 
     print_training_summary(&metrics, monitor_options, &early_stopping, &history);
     save_artifacts(&mut network, &history, monitor_options, model_out)?;
 
-    // Export one static learning-curve PNG per trained model so runs never
-    // overwrite each other: the filename embeds the YAML config name and a
-    // timestamp, and the chart carries every monitored metric (train/val loss,
-    // accuracy, precision) of that model on a single image.
     export_learning_curves(&history, config_name, &monitor_options.metrics);
 
     Ok(network)
@@ -372,7 +378,6 @@ output_layers:
 
     #[test]
     fn train_from_dataset_rejects_dataset_with_fewer_than_three_rows() {
-        // Build a minimal Dataset with only 2 rows: col 0 = label, cols 1..31 = features.
         let features = Array2::from_shape_fn((2, 31), |(i, j)| (i + j) as f64 * 0.1);
         let dataset = Dataset {
             features,
@@ -389,8 +394,6 @@ output_layers:
 
     #[test]
     fn train_from_dataset_rejects_dataset_with_bad_split_ratios() {
-        // n=3: train_end = round(0.85*3=2.55)=3, val_end = 3
-        // val_end (3) == train_end (3) → error.
         let features = Array2::from_shape_fn((3, 31), |(i, j)| (i + j) as f64 * 0.1);
         let dataset = Dataset {
             features,

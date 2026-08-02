@@ -1,7 +1,6 @@
 use ndarray::{Array2, Axis};
 use serde::{Deserialize, Serialize};
 
-/// Supported activation functions for neural network layers.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActivationFunction {
@@ -12,18 +11,13 @@ pub enum ActivationFunction {
     Softmax,
 }
 
-/// Trait for activation functions, providing forward and backward (gradient) passes.
 pub trait Activation {
-    /// Computes the activation function: `f(x)`.
     fn as_function(&self, x: &Array2<f64>) -> Array2<f64>;
-    /// Computes the derivative `f'(x)` for backpropagation.
     fn derivative(&self, x: &Array2<f64>) -> Array2<f64>;
-    /// Forward pass: applies the activation function to the input.
     #[inline]
     fn forward(&self, x: &Array2<f64>) -> Array2<f64> {
         self.as_function(x)
     }
-    /// Backward pass: multiplies upstream gradient by the activation derivative.
     #[inline]
     fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
         grad * self.derivative(x)
@@ -31,12 +25,6 @@ pub trait Activation {
 }
 
 impl Activation for ActivationFunction {
-    /// Backward pass. For the softmax activation this is an identity: when a
-    /// softmax output layer is paired with a cross-entropy loss, the loss
-    /// gradient is already the gradient with respect to the softmax *input*
-    /// (the softmax derivative is absorbed into the combined softmax +
-    /// cross-entropy gradient). Applying the elementwise s·(1−s) derivative
-    /// here would shrink the gradient by up to 4× and stall learning.
     #[inline]
     fn backward(&self, x: &Array2<f64>, grad: &Array2<f64>) -> Array2<f64> {
         match self {
@@ -195,7 +183,6 @@ mod tests {
         let s = activation.forward(&x);
         let dy = activation.derivative(&x);
 
-        // derivative = s * (1 - s) elementwise
         let expected = &s * &(1.0 - &s);
         assert_matrix_close(&dy, &expected, 1e-12);
     }

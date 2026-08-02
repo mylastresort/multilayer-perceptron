@@ -17,7 +17,6 @@ fn prepare_features(network: &Network, x_raw: &Array2<f64>) -> Result<Array2<f64
         return Err("prediction dataset has no rows".into());
     }
 
-    // Standardise using the training statistics stored in the model.
     if let (Some(mean), Some(std)) = (&network.feature_mean, &network.feature_std) {
         return Ok((x_raw - mean) / std);
     }
@@ -70,7 +69,6 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
     let dataset = build_dataset(&args.dataset_path)?;
     let mut network = Network::load(&args.model_path)?;
 
-    // Prepare features and labels the same way training does.
     let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
     let y = dataset
         .features
@@ -80,9 +78,6 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
     let x = prepare_features(&network, &x_raw)?;
     let predictions: Array2<f64> = network.predict(&x);
 
-    // Evaluate with the loss function stored in the trained model, so the
-    // prediction metric always matches the loss used during training (for the
-    // 2-class problem categorical and binary cross-entropy are equivalent).
     let loss = network
         .loss
         .compute(predictions.view(), y.view())
@@ -128,10 +123,8 @@ mod tests {
             .unwrap()
             .as_nanos();
         let csv_path = format!("/tmp/mlp_empty_{}_{}.csv", std::process::id(), ts);
-        // Only a header row — 0 data rows → triggers "prediction dataset has no rows".
         std::fs::write(&csv_path, "id,diagnosis,f1\n").unwrap();
 
-        // Build a minimal 1-output network compatible with 1 feature column.
         let model_path = format!("/tmp/mlp_pred_empty_{}_{}.json", std::process::id(), ts);
         let network = Network::builder()
             .learning_rate(0.01)
@@ -162,7 +155,6 @@ mod tests {
         });
         let _ = std::fs::remove_file(&csv_path);
         let _ = std::fs::remove_file(&model_path);
-        // Should error because dataset has 0 rows.
         assert!(result.is_err());
     }
 
@@ -176,7 +168,6 @@ mod tests {
         let model_path = format!("/tmp/mlp_predict_single_{}_{}.json", std::process::id(), ts);
         let dataset_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
 
-        // Single-output Sigmoid network: predictions.ncols() == 1 → exercises line 46.
         let network = Network::builder()
             .learning_rate(0.01)
             .add_layer(Layer::new(
@@ -218,8 +209,6 @@ mod tests {
         let model_path = format!("/tmp/mlp_predict_two_{}_{}.json", std::process::id(), ts);
         let dataset_path = format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"));
 
-        // Two-output Softmax network: predictions.ncols() == 2 → exercises the else-branch
-        // (lines 48-55) where accuracy is computed via argmax.
         let network = Network::builder()
             .learning_rate(0.01)
             .add_layer(Layer::new(

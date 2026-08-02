@@ -1,5 +1,3 @@
-//! Training engine: backpropagation, loss functions, optimizers, metrics, and monitoring.
-
 pub mod backprop;
 pub mod batch;
 pub mod loss;

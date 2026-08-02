@@ -2,7 +2,6 @@ use serde::Deserialize;
 
 use crate::{network::model::Network, training::backprop::LayerGradients};
 
-/// Lightweight tag used in YAML config — no network dependency.
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OptimizerKind {
@@ -11,7 +10,6 @@ pub enum OptimizerKind {
     Adam,
 }
 
-/// Runtime optimizer variant carrying hyperparameters and state.
 pub enum OptimizerType {
     SGD,
     Adam {
@@ -22,17 +20,11 @@ pub enum OptimizerType {
     },
 }
 
-/// Trait for gradient-based optimizers.
 pub trait Optimizer {
-    /// Applies one optimization step: `θ = θ - lr * g` (SGD) or variants.
     fn update(&mut self, network: &mut Network, gradients: &[LayerGradients]);
-    /// Sets the learning rate.
     fn set_lr(&mut self, lr: f64);
 }
 
-// ---------------------------------------------------------------------------
-// SGD
-// ---------------------------------------------------------------------------
 pub struct SGD {
     learning_rate: f64,
 }
@@ -61,9 +53,6 @@ impl Optimizer for SGD {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Adam
-// ---------------------------------------------------------------------------
 pub struct Adam {
     learning_rate: f64,
     beta1: f64,
@@ -71,9 +60,7 @@ pub struct Adam {
     epsilon: f64,
     weight_decay: f64,
     t: usize,
-    /// Per-layer first moment (weights, bias).
     m: Vec<(ndarray::Array2<f64>, ndarray::Array1<f64>)>,
-    /// Per-layer second moment (weights, bias).
     v: Vec<(ndarray::Array2<f64>, ndarray::Array1<f64>)>,
 }
 
@@ -91,7 +78,6 @@ impl Adam {
         }
     }
 
-    /// Sets decoupled L2 weight decay (AdamW-style).
     pub fn weight_decay(mut self, weight_decay: f64) -> Self {
         self.weight_decay = weight_decay;
         self
@@ -115,10 +101,6 @@ impl Adam {
 }
 
 impl Optimizer for Adam {
-    /// m_t = β1·m_{t-1} + (1−β1)·g
-    /// v_t = β2·v_{t-1} + (1−β2)·g²
-    /// m̂  = m_t / (1−β1^t),  v̂ = v_t / (1−β2^t)
-    /// θ_t = θ − lr · (m̂ / (√v̂ + ε) + wd·θ)   (decoupled weight decay)
     fn update(&mut self, network: &mut Network, gradients: &[LayerGradients]) {
         assert_eq!(network.layers.len(), gradients.len());
         self.ensure_moments(network);
@@ -157,9 +139,6 @@ impl Optimizer for Adam {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 impl OptimizerType {
     pub fn create(&self, learning_rate: f64) -> Box<dyn Optimizer> {
         match self {
@@ -175,7 +154,6 @@ impl OptimizerType {
         }
     }
 
-    /// Builds the optimizer variant for a YAML [`OptimizerKind`] with weight decay.
     pub fn for_kind(kind: OptimizerKind, weight_decay: f64) -> Self {
         match kind {
             OptimizerKind::Sgd => OptimizerType::SGD,

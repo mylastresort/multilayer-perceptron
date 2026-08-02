@@ -1,6 +1,6 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 
 use crate::{
     console::{Tone, bold, paint},
@@ -35,6 +35,34 @@ fn make_epoch_logs(metrics: &Metrics, has_val: bool) -> CallbackLogs {
         val_accuracy: has_val.then_some(metrics.val_accuracy),
         precision: Some(metrics.train_precision),
         val_precision: has_val.then_some(metrics.val_precision),
+    }
+}
+
+fn mean_epoch_loss(total_loss: f64, batch_count: usize) -> f64 {
+    if batch_count == 0 {
+        0.0
+    } else {
+        total_loss / (batch_count as f64)
+    }
+}
+
+fn begin_epoch(callbacks: &mut [&mut dyn Callback], epoch: usize) {
+    for callback in callbacks.iter_mut() {
+        callback.on_epoch_begin(epoch);
+    }
+}
+
+fn end_epoch(
+    callbacks: &mut [&mut dyn Callback],
+    epoch: usize,
+    logs: &CallbackLogs,
+    network: &mut Network,
+) {
+    for callback in callbacks.iter_mut() {
+        callback.on_epoch_end(epoch, Some(logs));
+    }
+    for callback in callbacks.iter_mut() {
+        callback.on_epoch_end_network(epoch, Some(logs), network);
     }
 }
 
@@ -82,14 +110,6 @@ pub struct Trainer {
     epochs: usize,
 }
 
-// #[derive(Serialize, Deserialize)]
-// pub struct TrainingHistory {
-//     pub train_loss: Vec<f64>,
-//     pub val_loss: Vec<f64>,
-//     pub train_accuracy: Vec<f64>,
-//     pub val_accuracy: Vec<f64>,
-// }
-
 impl Default for Trainer {
     fn default() -> Self {
         Self {
@@ -101,7 +121,6 @@ impl Default for Trainer {
     }
 }
 
-// Allow constructing a Trainer from any boxed optimizer implementation.
 impl From<Box<dyn Optimizer>> for Trainer {
     fn from(optimizer: Box<dyn Optimizer>) -> Self {
         Self {
@@ -200,28 +219,27 @@ impl Trainer {
     }
 
     fn run_training_epoch<'d, R: Rng>(&mut self, ctx: EpochContext<'_, 'd, '_, '_, '_, R>) -> bool {
-        let EpochContext { network, x_train, y_train, val_data, indices, rng, metrics, callbacks, epoch } = ctx;
-        for callback in callbacks.iter_mut() {
-            callback.on_epoch_begin(epoch);
-        }
+        let EpochContext {
+            network,
+            x_train,
+            y_train,
+            val_data,
+            indices,
+            rng,
+            metrics,
+            callbacks,
+            epoch,
+        } = ctx;
+        begin_epoch(callbacks, epoch);
         indices.shuffle(rng);
 
-        let (total_loss, batch_index) = self.run_epoch(network, x_train, y_train, indices, callbacks);
-        metrics.train_loss = if batch_index == 0 {
-            0.0
-        } else {
-            total_loss / (batch_index as f64)
-        };
-
+        let (total_loss, batch_index) =
+            self.run_epoch(network, x_train, y_train, indices, callbacks);
+        metrics.train_loss = mean_epoch_loss(total_loss, batch_index);
         self.eval_epoch(network, x_train, y_train, val_data, metrics);
 
         let epoch_logs = make_epoch_logs(metrics, val_data.is_some());
-        for callback in callbacks.iter_mut() {
-            callback.on_epoch_end(epoch, Some(&epoch_logs));
-        }
-        for callback in callbacks.iter_mut() {
-            callback.on_epoch_end_network(epoch, Some(&epoch_logs), network);
-        }
+        end_epoch(callbacks, epoch, &epoch_logs, network);
 
         if callbacks.iter().any(|callback| callback.should_stop()) {
             print_early_stop(epoch);
@@ -241,29 +259,32 @@ impl Trainer {
         let mut batch_index = 0usize;
         let mut total_loss = 0.0;
 
-        create_batches(x_train, y_train, indices, self.batch_size).sum_by(
-            |x_batch, y_batch| {
-                for callback in callbacks.iter_mut() {
-                    callback.on_batch_begin(batch_index);
-                }
+        create_batches(x_train, y_train, indices, self.batch_size).sum_by(|x_batch, y_batch| {
+            for callback in callbacks.iter_mut() {
+                callback.on_batch_begin(batch_index);
+            }
 
-                let batch_loss = self.apply_batch(network, &x_batch, &y_batch);
-                total_loss += batch_loss;
+            let batch_loss = self.apply_batch(network, &x_batch, &y_batch);
+            total_loss += batch_loss;
 
-                let batch_logs = make_batch_logs(batch_loss);
-                for callback in callbacks.iter_mut() {
-                    callback.on_batch_end(batch_index, Some(&batch_logs));
-                }
+            let batch_logs = make_batch_logs(batch_loss);
+            for callback in callbacks.iter_mut() {
+                callback.on_batch_end(batch_index, Some(&batch_logs));
+            }
 
-                batch_index += 1;
-                batch_loss
-            },
-        );
+            batch_index += 1;
+            batch_loss
+        });
 
         (total_loss, batch_index)
     }
 
-    fn apply_batch(&mut self, network: &mut Network, x_batch: &Array2<f64>, y_batch: &Array1<f64>) -> f64 {
+    fn apply_batch(
+        &mut self,
+        network: &mut Network,
+        x_batch: &Array2<f64>,
+        y_batch: &Array1<f64>,
+    ) -> f64 {
         let pred = network.forward(x_batch);
         let batch_size = pred.nrows() as f64;
         let batch_loss = self
@@ -285,11 +306,7 @@ impl Trainer {
         y: ArrayView1<'data, f64>,
     ) -> (f64, f64, f64) {
         let pred = network.forward(x);
-        let loss = self
-            .loss_fn
-            .compute(pred.view(), y)
-            .mean()
-            .unwrap_or(0.0);
+        let loss = self.loss_fn.compute(pred.view(), y).mean().unwrap_or(0.0);
         let scores = compute_classification_scores_from_labels(pred.view(), y);
         (loss, scores.accuracy, scores.precision)
     }
@@ -364,8 +381,6 @@ mod tests {
         (x, y)
     }
 
-    /// Sets `seen_epoch_end = true` in `on_epoch_end`; `should_stop()` returns that flag.
-    /// This ensures the early-stopping branch fires on the very first epoch.
     struct StopAfterFirstEpoch {
         seen_epoch_end: bool,
     }
@@ -440,8 +455,6 @@ mod tests {
 
     #[test]
     fn trainer_early_stopping_branch_fires_and_on_train_end_called() {
-        // StopAfterFirstEpoch: on_epoch_end sets seen=true → should_stop() returns true
-        // → the early-stopping println+break block executes, then on_train_end runs.
         let mut net = tiny_net();
         let (x, y) = tiny_data();
         let mut t = Trainer::new(OptimizerType::SGD.create(0.01), LossFunction::MSE, 4, 5);

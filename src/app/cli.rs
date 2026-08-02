@@ -10,10 +10,7 @@ pub fn default_dataset_path() -> String {
 }
 
 pub fn default_config_path() -> String {
-    format!(
-        "{}/models/mandatory_sgd.yaml",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/models/mandatory_sgd.yaml", env!("CARGO_MANIFEST_DIR"))
 }
 
 const USAGE_TEMPLATE: &str = concat!(
@@ -152,21 +149,63 @@ fn apply_flag(
     Ok(FlagAction::Handled)
 }
 
-fn parse_numeric_flags(
+fn parse_net_numeric_flags(
     flags: &mut ParsedFlags,
     flag: &str,
     arg: &str,
 ) -> Result<bool, Box<dyn Error>> {
     Ok(match flag {
-        "--ratio" => { flags.split_ratio = parse_value(arg, flag)?; true }
-        "--net-learning-rate" | "-l" => { flags.net_overrides.learning_rate = Some(parse_value(arg, flag)?); true }
-        "--net-epochs" | "-e" => { flags.net_overrides.epochs = Some(parse_value(arg, flag)?); true }
-        "--net-batch-size" | "-b" => { flags.net_overrides.batch_size = Some(parse_value(arg, flag)?); true }
-        "--early-stop-patience" | "-p" => { flags.monitor_options.early_stop_patience = parse_value(arg, flag)?; true }
-        "--early-stop-min-delta" => { flags.monitor_options.early_stop_min_delta = parse_value(arg, flag)?; true }
-        "--early-stop-start-epoch" | "-s" => { flags.monitor_options.early_stop_start_epoch = parse_value(arg, flag)?; true }
+        "--net-learning-rate" | "-l" => {
+            flags.net_overrides.learning_rate = Some(parse_value(arg, flag)?);
+            true
+        }
+        "--net-epochs" | "-e" => {
+            flags.net_overrides.epochs = Some(parse_value(arg, flag)?);
+            true
+        }
+        "--net-batch-size" | "-b" => {
+            flags.net_overrides.batch_size = Some(parse_value(arg, flag)?);
+            true
+        }
         _ => false,
     })
+}
+
+fn parse_monitor_numeric_flags(
+    flags: &mut ParsedFlags,
+    flag: &str,
+    arg: &str,
+) -> Result<bool, Box<dyn Error>> {
+    Ok(match flag {
+        "--early-stop-patience" | "-p" => {
+            flags.monitor_options.early_stop_patience = parse_value(arg, flag)?;
+            true
+        }
+        "--early-stop-min-delta" => {
+            flags.monitor_options.early_stop_min_delta = parse_value(arg, flag)?;
+            true
+        }
+        "--early-stop-start-epoch" | "-s" => {
+            flags.monitor_options.early_stop_start_epoch = parse_value(arg, flag)?;
+            true
+        }
+        _ => false,
+    })
+}
+
+fn parse_numeric_flags(
+    flags: &mut ParsedFlags,
+    flag: &str,
+    arg: &str,
+) -> Result<bool, Box<dyn Error>> {
+    if flag == "--ratio" {
+        flags.split_ratio = parse_value(arg, flag)?;
+        return Ok(true);
+    }
+    if parse_net_numeric_flags(flags, flag, arg)? {
+        return Ok(true);
+    }
+    parse_monitor_numeric_flags(flags, flag, arg)
 }
 
 fn apply_value_flag(
@@ -245,11 +284,15 @@ fn resolve_args(
     flags: ParsedFlags,
 ) -> Result<CliArgs, Box<dyn Error>> {
     let dataset_path = match subcommand {
-        Subcommand::Train => require_train_path(flags.dataset_path, "--dataset", "dataset", binary_name)?,
+        Subcommand::Train => {
+            require_train_path(flags.dataset_path, "--dataset", "dataset", binary_name)?
+        }
         _ => flags.dataset_path.unwrap_or_else(default_dataset_path),
     };
     let config_path = match subcommand {
-        Subcommand::Train => require_train_path(flags.config_path, "--config", "config", binary_name)?,
+        Subcommand::Train => {
+            require_train_path(flags.config_path, "--config", "config", binary_name)?
+        }
         _ => flags.config_path.unwrap_or_else(default_config_path),
     };
 
@@ -269,9 +312,6 @@ fn resolve_args(
     })
 }
 
-/// Core argument parsing logic. Accepts the binary name and the remaining
-/// arguments (everything after `argv[0]`). Returns `Err` when `--help` / `-h`
-/// is requested so that the caller can decide whether to exit.
 pub fn parse_args(binary_name: &str, rest: &[String]) -> Result<CliArgs, Box<dyn Error>> {
     if rest.is_empty() || rest[0] == "--help" || rest[0] == "-h" {
         return Err(usage(binary_name).into());
@@ -363,13 +403,15 @@ output_layers:
         assert!(msg.contains("Usage:"), "missing 'Usage:'");
     }
 
-    // -------------------------------------------------------------------
-    // parse_args – subcommand routing
-    // -------------------------------------------------------------------
-
     #[test]
     fn parse_args_train_subcommand() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(matches!(cli.subcommand, super::Subcommand::Train));
     }
@@ -408,13 +450,15 @@ output_layers:
         assert!(parse_args("mlp", &ss(&["unknown"])).is_err());
     }
 
-    // -------------------------------------------------------------------
-    // parse_args – common flags
-    // -------------------------------------------------------------------
-
     #[test]
     fn parse_args_dataset_long_flag() {
-        let args = ss(&["train", "--config", "/tmp/cfg.yaml", "--dataset", "/tmp/data.csv"]);
+        let args = ss(&[
+            "train",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--dataset",
+            "/tmp/data.csv",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.dataset_path, "/tmp/data.csv");
     }
@@ -428,7 +472,13 @@ output_layers:
 
     #[test]
     fn parse_args_config_long_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.config_path, "/tmp/cfg.yaml");
     }
@@ -442,35 +492,59 @@ output_layers:
 
     #[test]
     fn parse_args_verbose_long_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--verbose"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--verbose",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.verbose);
     }
 
     #[test]
     fn parse_args_verbose_short_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-v"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-v",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.verbose);
     }
 
     #[test]
     fn parse_args_gui_long_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--gui"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--gui",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.gui);
     }
 
     #[test]
     fn parse_args_gui_short_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-g"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-g",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.gui);
     }
-
-    // -------------------------------------------------------------------
-    // parse_args – split-specific flags
-    // -------------------------------------------------------------------
 
     #[test]
     fn parse_args_split_train_out_and_val_out() {
@@ -499,158 +573,322 @@ output_layers:
         assert!(parse_args("mlp", &args).is_err());
     }
 
-    // -------------------------------------------------------------------
-    // parse_args – train-specific flags
-    // -------------------------------------------------------------------
-
     #[test]
     fn parse_args_model_out() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--model-out", "/tmp/model.json"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--model-out",
+            "/tmp/model.json",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.model_out.as_deref(), Some("/tmp/model.json"));
     }
 
     #[test]
     fn parse_args_net_learning_rate_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-learning-rate", "0.001"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-learning-rate",
+            "0.001",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!((cli.net_overrides.learning_rate.unwrap() - 0.001).abs() < 1e-12);
     }
 
     #[test]
     fn parse_args_net_learning_rate_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-l", "0.002"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-l",
+            "0.002",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!((cli.net_overrides.learning_rate.unwrap() - 0.002).abs() < 1e-12);
     }
 
     #[test]
     fn parse_args_net_learning_rate_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-learning-rate", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-learning-rate",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_net_epochs_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-epochs", "50"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-epochs",
+            "50",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.net_overrides.epochs, Some(50));
     }
 
     #[test]
     fn parse_args_net_epochs_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-e", "20"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-e",
+            "20",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.net_overrides.epochs, Some(20));
     }
 
     #[test]
     fn parse_args_net_epochs_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-epochs", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-epochs",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_net_batch_size_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-batch-size", "32"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-batch-size",
+            "32",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.net_overrides.batch_size, Some(32));
     }
 
     #[test]
     fn parse_args_net_batch_size_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-b", "16"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-b",
+            "16",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.net_overrides.batch_size, Some(16));
     }
 
     #[test]
     fn parse_args_net_batch_size_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--net-batch-size", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--net-batch-size",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
-    // -------------------------------------------------------------------
-    // parse_args – monitor flags
-    // -------------------------------------------------------------------
-
     #[test]
     fn parse_args_early_stopping_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stopping"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stopping",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.monitor_options.early_stopping);
     }
 
     #[test]
     fn parse_args_no_early_stopping_flag() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--no-early-stopping"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--no-early-stopping",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(!cli.monitor_options.early_stopping);
     }
 
     #[test]
     fn parse_args_early_stopping_defaults_to_true() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(cli.monitor_options.early_stopping);
     }
 
     #[test]
     fn parse_args_early_stop_patience_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-patience", "5"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-patience",
+            "5",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.monitor_options.early_stop_patience, 5);
     }
 
     #[test]
     fn parse_args_early_stop_patience_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-p", "3"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-p",
+            "3",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.monitor_options.early_stop_patience, 3);
     }
 
     #[test]
     fn parse_args_early_stop_patience_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-patience", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-patience",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_early_stop_min_delta() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-min-delta", "0.001"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-min-delta",
+            "0.001",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!((cli.monitor_options.early_stop_min_delta - 0.001).abs() < 1e-12);
     }
 
     #[test]
     fn parse_args_early_stop_min_delta_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-min-delta", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-min-delta",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_early_stop_start_epoch_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-start-epoch", "10"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-start-epoch",
+            "10",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.monitor_options.early_stop_start_epoch, 10);
     }
 
     #[test]
     fn parse_args_early_stop_start_epoch_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-s", "5"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-s",
+            "5",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(cli.monitor_options.early_stop_start_epoch, 5);
     }
 
     #[test]
     fn parse_args_early_stop_start_epoch_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-start-epoch", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-start-epoch",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_monitor_history_out() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--monitor-history-out", "/tmp/history.json"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--monitor-history-out",
+            "/tmp/history.json",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert_eq!(
             cli.monitor_options.history_out.as_deref(),
@@ -660,7 +898,15 @@ output_layers:
 
     #[test]
     fn parse_args_early_stop_mode_valid() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-mode", "min"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-mode",
+            "min",
+        ]);
         let cli = parse_args("mlp", &args).unwrap();
         assert!(matches!(
             cli.monitor_options.early_stop_mode,
@@ -670,43 +916,87 @@ output_layers:
 
     #[test]
     fn parse_args_early_stop_mode_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-mode", "bad"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-mode",
+            "bad",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_early_stop_metric_valid() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-metric", "loss"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-metric",
+            "loss",
+        ]);
         assert!(parse_args("mlp", &args).is_ok());
     }
 
     #[test]
     fn parse_args_early_stop_metric_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-m", "loss"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-m",
+            "loss",
+        ]);
         assert!(parse_args("mlp", &args).is_ok());
     }
 
     #[test]
     fn parse_args_early_stop_metric_invalid_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--early-stop-metric", "unknown_metric_xyz"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--early-stop-metric",
+            "unknown_metric_xyz",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_monitor_metrics_long() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--monitor-metrics", "loss,accuracy"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--monitor-metrics",
+            "loss,accuracy",
+        ]);
         assert!(parse_args("mlp", &args).is_ok());
     }
 
     #[test]
     fn parse_args_monitor_metrics_short() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-M", "loss"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-M",
+            "loss",
+        ]);
         assert!(parse_args("mlp", &args).is_ok());
     }
-
-    // -------------------------------------------------------------------
-    // parse_args – predict-specific flags
-    // -------------------------------------------------------------------
 
     #[test]
     fn parse_args_predict_model_flag() {
@@ -715,25 +1005,42 @@ output_layers:
         assert_eq!(cli.model_in.as_deref(), Some("/tmp/model.json"));
     }
 
-    // -------------------------------------------------------------------
-    // parse_args – error cases
-    // -------------------------------------------------------------------
-
     #[test]
     fn parse_args_unknown_argument_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--unknown-flag"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--unknown-flag",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_help_inside_subcommand_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "--help"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "--help",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
     #[test]
     fn parse_args_help_short_inside_subcommand_returns_err() {
-        let args = ss(&["train", "--dataset", "/tmp/data.csv", "--config", "/tmp/cfg.yaml", "-h"]);
+        let args = ss(&[
+            "train",
+            "--dataset",
+            "/tmp/data.csv",
+            "--config",
+            "/tmp/cfg.yaml",
+            "-h",
+        ]);
         assert!(parse_args("mlp", &args).is_err());
     }
 
@@ -753,10 +1060,6 @@ output_layers:
         assert!(cli.model_out.is_none());
         assert!(cli.model_in.is_none());
     }
-
-    // -------------------------------------------------------------------
-    // apply_net_overrides
-    // -------------------------------------------------------------------
 
     #[test]
     fn apply_net_overrides_sets_learning_rate() {

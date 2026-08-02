@@ -23,7 +23,6 @@ pub struct LayerTransitionSpec {
     pub initializer: WeightInitializer,
 }
 
-/// YAML-deserializable network architecture and training configuration.
 #[derive(Debug, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_learning_rate")]
@@ -88,7 +87,6 @@ fn activation_for(group: LayerGroup, layer: &LayerConfig) -> ActivationFunction 
 }
 
 impl NetworkConfig {
-    /// Loads a [`NetworkConfig`] from a YAML file.
     pub fn from_yaml_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&raw)?;
@@ -96,7 +94,6 @@ impl NetworkConfig {
         Ok(config)
     }
 
-    /// Builds a [`Network`] from this configuration.
     pub fn build_network(&self) -> Network {
         let mut builder = Network::builder()
             .learning_rate(self.learning_rate)
@@ -114,7 +111,6 @@ impl NetworkConfig {
         builder.build()
     }
 
-    /// Resolves the full layer transition specs (sizes, activations, initializers).
     pub fn resolved_layer_specs(&self) -> Vec<LayerTransitionSpec> {
         let mut specs = Vec::new();
         for window in self.grouped_layers().windows(2) {
