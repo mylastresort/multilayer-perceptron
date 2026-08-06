@@ -15,6 +15,7 @@ jobs:
 
     env:
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_TEST_DEBUG: 0
 
     steps:
       - uses: actions/checkout@v4
@@ -41,15 +42,16 @@ jobs:
         run: cargo install cargo-tarpaulin --jobs $(nproc)
 
       - name: Run tests
-        run: cargo test --jobs $(nproc)
+        run: cargo test
 
       - name: Generate coverage (lcov format for Codecov)
+        env:
+          CARGO_BUILD_JOBS: 1
         run: |
           cargo tarpaulin \
             --engine llvm \
             --out Lcov \
             --output-dir coverage \
-            --jobs $(nproc) \
             --verbose
 
       - name: Upload coverage to Codecov

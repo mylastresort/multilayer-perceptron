@@ -1,3 +1,4 @@
+pub mod app;
 pub mod console;
 pub mod data;
 pub mod network;

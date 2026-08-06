@@ -9,9 +9,7 @@ use mlp::network::layer::Layer;
 use mlp::network::model::Network;
 use mlp::training::loss::LossFunction;
 use mlp::training::optimizer::OptimizerType;
-use mlp::visualization::plotter::{
-    TrainingHistory, plot_accuracy_curve, plot_loss_curve, plot_training_curves,
-};
+use mlp::visualization::plotter::{TrainingHistory, plot_training_curves};
 use ndarray::{Array2, Axis, s};
 
 fn build_dataset_column_names() -> Vec<String> {
@@ -182,7 +180,7 @@ fn loads_dataset_trains_and_generates_learning_curve_per_iteration() {
             batch_size: 8,
             epochs: iterations,
             optimizer: OptimizerType::SGD,
-            loss_fn: LossFunction::CategoricalCrossEntropy,
+            loss_fn: LossFunction::BinaryCrossEntropy,
         },
         &mut callbacks,
     );
@@ -215,22 +213,12 @@ fn loads_dataset_trains_and_generates_learning_curve_per_iteration() {
             val_precision: callback.val_precisions,
         };
 
-        let loss_path = format!("{}/learning_curve_per_iteration.png", output_dir);
-        plot_loss_curve(&history, &loss_path).expect("learning-curve plot should be generated");
-        maybe_open_plot(&loss_path);
-
-        let acc_path = format!("{}/learning_curve_accuracy.png", output_dir);
-        plot_accuracy_curve(&history, &acc_path).expect("accuracy curve should be generated");
-        maybe_open_plot(&acc_path);
-
         let combined_path = format!("{}/learning_curves_combined.png", output_dir);
         plot_training_curves(&history, &combined_path, &[])
             .expect("combined curves should be generated");
         maybe_open_plot(&combined_path);
 
-        for path in [&loss_path, &acc_path, &combined_path] {
-            let metadata = fs::metadata(path).expect("learning-curve image should exist");
-            assert!(metadata.len() > 0);
-        }
+        let metadata = fs::metadata(&combined_path).expect("learning-curve image should exist");
+        assert!(metadata.len() > 0);
     }
 }

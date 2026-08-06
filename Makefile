@@ -1,4 +1,4 @@
-.PHONY: all re build run test check fmt clippy clean doc open-doc
+.PHONY: all re build run check fmt clippy clean doc open-doc
 
 all: build
 
@@ -7,11 +7,11 @@ re: clean build
 build:
 	cargo build
 
-run:
-	cargo run
-
 test:
 	cargo test
+
+run:
+	cargo run
 
 check:
 	cargo check
@@ -21,6 +21,7 @@ fmt:
 
 clippy:
 	cargo clippy --lib --bins --all-features -- -W clippy::too_many_lines -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 clean:
 	cargo clean

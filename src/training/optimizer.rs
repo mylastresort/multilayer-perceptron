@@ -1,3 +1,4 @@
+use ndarray::{Array1, Array2};
 use serde::Deserialize;
 
 use crate::{network::model::Network, training::backprop::LayerGradients};
@@ -16,71 +17,59 @@ pub enum OptimizerType {
         beta1: f64,
         beta2: f64,
         epsilon: f64,
-        weight_decay: f64,
     },
 }
 
 pub trait Optimizer {
     fn update(&mut self, network: &mut Network, gradients: &[LayerGradients]);
-    fn set_lr(&mut self, lr: f64);
 }
 
 pub struct SGD {
-    learning_rate: f64,
+    lr: f64,
 }
 
 impl SGD {
-    pub fn new(learning_rate: f64) -> Self {
-        Self { learning_rate }
+    pub fn new(lr: f64) -> Self {
+        Self { lr }
     }
 }
 
 impl Optimizer for SGD {
-    fn update(&mut self, network: &mut Network, gradients: &[LayerGradients]) {
+    /// update: W ← W − η·∂L/∂W, b ← b − η·∂L/∂b.
+    fn update(&mut self, network: &mut Network, grads: &[LayerGradients]) {
         assert_eq!(
             network.layers.len(),
-            gradients.len(),
+            grads.len(),
             "network layer count and gradient count must match"
         );
-        for (layer, grad) in network.layers.iter_mut().zip(gradients.iter()) {
-            layer.weights = &layer.weights - &(grad.weights.clone() * self.learning_rate);
-            layer.bias = &layer.bias - &(grad.bias.clone() * self.learning_rate);
+        for (layer, g) in network.layers.iter_mut().zip(grads.iter()) {
+            layer.weights = &layer.weights - &(g.weights.clone() * self.lr);
+            layer.bias = &layer.bias - &(g.bias.clone() * self.lr);
         }
-    }
-
-    fn set_lr(&mut self, lr: f64) {
-        self.learning_rate = lr;
     }
 }
 
 pub struct Adam {
-    learning_rate: f64,
+    lr: f64,
     beta1: f64,
     beta2: f64,
     epsilon: f64,
-    weight_decay: f64,
     t: usize,
-    m: Vec<(ndarray::Array2<f64>, ndarray::Array1<f64>)>,
-    v: Vec<(ndarray::Array2<f64>, ndarray::Array1<f64>)>,
+    m: Vec<(Array2<f64>, Array1<f64>)>,
+    v: Vec<(Array2<f64>, Array1<f64>)>,
 }
 
 impl Adam {
-    pub fn new(learning_rate: f64, beta1: f64, beta2: f64, epsilon: f64) -> Self {
+    pub fn new(lr: f64, beta1: f64, beta2: f64, epsilon: f64) -> Self {
         Self {
-            learning_rate,
+            lr,
             beta1,
             beta2,
             epsilon,
-            weight_decay: 0.0,
             t: 0,
             m: Vec::new(),
             v: Vec::new(),
         }
-    }
-
-    pub fn weight_decay(mut self, weight_decay: f64) -> Self {
-        self.weight_decay = weight_decay;
-        self
     }
 
     fn ensure_moments(&mut self, network: &Network) {
@@ -90,52 +79,74 @@ impl Adam {
                 .iter()
                 .map(|l| {
                     (
-                        ndarray::Array2::zeros(l.weights.raw_dim()),
-                        ndarray::Array1::zeros(l.bias.raw_dim()),
+                        Array2::zeros(l.weights.raw_dim()),
+                        Array1::zeros(l.bias.raw_dim()),
                     )
                 })
                 .collect();
             self.v = self.m.clone();
         }
     }
+
+    /// first moment update: m ← β₁·m + (1 − β₁)·g.
+    fn update_first_moment(&mut self, i: usize, g: &LayerGradients) {
+        let (mw, mb) = &mut self.m[i];
+        *mw = &*mw * self.beta1 + &(g.weights.clone() * (1.0 - self.beta1));
+        *mb = &*mb * self.beta1 + &(g.bias.clone() * (1.0 - self.beta1));
+    }
+
+    /// second moment update: v ← β₂·v + (1 − β₂)·g².
+    fn update_second_moment(&mut self, i: usize, g: &LayerGradients) {
+        let (vw, vb) = &mut self.v[i];
+        *vw = &*vw * self.beta2 + &(g.weights.mapv(|x| x * x) * (1.0 - self.beta2));
+        *vb = &*vb * self.beta2 + &(g.bias.mapv(|x| x * x) * (1.0 - self.beta2));
+    }
+
+    /// bias-corrected moment update: θ ← θ − η·(m/(1−β₁ᵗ))/(√(v/(1−β₂ᵗ)) + ε) for θ = W, b.
+    fn apply_bias_corrected_update(
+        &self,
+        i: usize,
+        w: &mut Array2<f64>,
+        b: &mut Array1<f64>,
+        bc1: f64,
+        bc2: f64,
+    ) {
+        let (mw, mb) = &self.m[i];
+        let (vw, vb) = &self.v[i];
+        // bias-corrected moments: m̂ = m/(1 − β₁ᵗ), v̂ = v/(1 − β₂ᵗ)
+        let (mw_hat, mb_hat) = (mw / bc1, mb / bc1);
+        let (vw_hat, vb_hat) = (vw / bc2, vb / bc2);
+        // parameter update: θ ← θ − η·m̂/(√v̂ + ε) for θ = W, b
+        *w = &*w - &(mw_hat * self.lr / vw_hat.mapv(|v| v.sqrt() + self.epsilon));
+        *b = &*b - &(mb_hat * self.lr / vb_hat.mapv(|v| v.sqrt() + self.epsilon));
+    }
+
+    /// bias correction factor for the first moment: bc1 = 1 − β₁ᵗ.
+    fn bias_correction1(&self) -> f64 {
+        1.0 - self.beta1.powi(self.t as i32)
+    }
+
+    /// bias correction factor for the second moment: bc2 = 1 − β₂ᵗ.
+    fn bias_correction2(&self) -> f64 {
+        1.0 - self.beta2.powi(self.t as i32)
+    }
 }
 
 impl Optimizer for Adam {
-    fn update(&mut self, network: &mut Network, gradients: &[LayerGradients]) {
-        assert_eq!(network.layers.len(), gradients.len());
+    /// update: W ← W − η·m̂/(√v̂+ε), b ← b − η·m̂/(√v̂+ε) with bias-corrected moments m̂, v̂.
+    fn update(&mut self, network: &mut Network, grads: &[LayerGradients]) {
+        assert_eq!(network.layers.len(), grads.len());
         self.ensure_moments(network);
 
         self.t += 1;
-        let bc1 = 1.0 - self.beta1.powi(self.t as i32);
-        let bc2 = 1.0 - self.beta2.powi(self.t as i32);
-        let decay = 1.0 - self.learning_rate * self.weight_decay;
+        let bc1 = self.bias_correction1();
+        let bc2 = self.bias_correction2();
 
-        for ((layer, grad), ((mw, mb), (vw, vb))) in network
-            .layers
-            .iter_mut()
-            .zip(gradients.iter())
-            .zip(self.m.iter_mut().zip(self.v.iter_mut()))
-        {
-            *mw = &(*mw) * self.beta1 + &(grad.weights.clone() * (1.0 - self.beta1));
-            *mb = &(*mb) * self.beta1 + &(grad.bias.clone() * (1.0 - self.beta1));
-
-            *vw = &(*vw) * self.beta2 + &(grad.weights.mapv(|v| v * v) * (1.0 - self.beta2));
-            *vb = &(*vb) * self.beta2 + &(grad.bias.mapv(|v| v * v) * (1.0 - self.beta2));
-
-            let mw_hat = mw.mapv(|v| v / bc1);
-            let mb_hat = mb.mapv(|v| v / bc1);
-            let vw_hat = vw.mapv(|v| v / bc2);
-            let vb_hat = vb.mapv(|v| v / bc2);
-
-            layer.weights = &layer.weights * decay
-                - &(mw_hat * self.learning_rate / vw_hat.mapv(|v| v.sqrt() + self.epsilon));
-            layer.bias = &layer.bias
-                - &(mb_hat * self.learning_rate / vb_hat.mapv(|v| v.sqrt() + self.epsilon));
+        for (i, (layer, g)) in network.layers.iter_mut().zip(grads.iter()).enumerate() {
+            self.update_first_moment(i, g);
+            self.update_second_moment(i, g);
+            self.apply_bias_corrected_update(i, &mut layer.weights, &mut layer.bias, bc1, bc2);
         }
-    }
-
-    fn set_lr(&mut self, lr: f64) {
-        self.learning_rate = lr;
     }
 }
 
@@ -147,21 +158,17 @@ impl OptimizerType {
                 beta1,
                 beta2,
                 epsilon,
-                weight_decay,
-            } => Box::new(
-                Adam::new(learning_rate, *beta1, *beta2, *epsilon).weight_decay(*weight_decay),
-            ),
+            } => Box::new(Adam::new(learning_rate, *beta1, *beta2, *epsilon)),
         }
     }
 
-    pub fn for_kind(kind: OptimizerKind, weight_decay: f64) -> Self {
+    pub fn for_kind(kind: OptimizerKind) -> Self {
         match kind {
             OptimizerKind::Sgd => OptimizerType::SGD,
             OptimizerKind::Adam => OptimizerType::Adam {
                 beta1: 0.9,
                 beta2: 0.999,
                 epsilon: 1e-8,
-                weight_decay,
             },
         }
     }
@@ -169,17 +176,6 @@ impl OptimizerType {
 
 impl From<OptimizerKind> for OptimizerType {
     fn from(kind: OptimizerKind) -> Self {
-        Self::for_kind(kind, 0.0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Adam, Optimizer};
-
-    #[test]
-    fn adam_set_lr_updates_learning_rate() {
-        let mut opt = Adam::new(0.01, 0.9, 0.999, 1e-8);
-        opt.set_lr(0.001);
+        Self::for_kind(kind)
     }
 }

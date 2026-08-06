@@ -3,8 +3,6 @@
 Train and evaluate a configurable MLP from CSV data with YAML-based network/training config,
 per-epoch metrics, static learning-curve PNGs, early stopping, and metric history export.
 
-[![Codecov](https://codecov.io/gh/mylastresort/multilayer-perceptron/graph/badge.svg?token=jmjvtSTUeJ)](https://codecov.io/gh/mylastresort/multilayer-perceptron)
-
 ## Getting Started
 
 ```bash
@@ -75,15 +73,6 @@ cargo run -- train \
 	--config /absolute/path/to/config.yaml
 ```
 
-Print resolved config summary:
-
-```bash
-cargo run -- train \
-	--dataset data/data.csv \
-	--config models/mandatory_sgd.yaml \
-	--verbose
-```
-
 Override config values from CLI:
 
 ```bash
@@ -105,17 +94,19 @@ and the chart carries all curves of that model on one graph:
 - training and validation accuracy per epoch
 - training and validation precision per epoch
 
-Enable early stopping (on by default; restores the best-epoch weights):
+Enable early stopping (opt-in via `--early-stopping`; rolls the saved model
+back to the best monitored epoch):
 
 ```bash
 cargo run -- train \
 	--dataset data/data.csv \
 	--config models/mandatory_sgd.yaml \
+	--early-stopping \
 	--model-out models/model.json
 ```
 
-Early stopping is enabled by default with a patience of 60, so the saved model
-is rolled back to the best epoch (`restore_best_weights`). Tune it explicitly:
+Early stopping is off by default. With it enabled, the model is rolled back to
+the best epoch (`restore_best_weights`) with a default patience of 60. Tune it:
 
 ```bash
 cargo run -- train \
@@ -129,7 +120,9 @@ cargo run -- train \
 	--early-stop-start-epoch 2
 ```
 
-Disable it entirely (saves the final-epoch weights):
+Early stopping is off by default (the final-epoch weights are saved); pass
+`--early-stopping` to enable it, or `--no-early-stopping` to explicitly keep
+it off:
 
 ```bash
 cargo run -- train \
@@ -150,17 +143,13 @@ cargo run -- train \
 
 ## Scripts
 
-`scripts/train_model.sh` runs the full pipeline interactively: it prompts for a
-dataset (default `data/data.csv`) and a numbered config menu of every shipped
-model, then splits, trains and evaluates in one shot.
-
-Each shipped config also has its own dedicated script, so a single command
-trains and evaluates with that config and its bonus flags baked in:
+Each shipped config has its own dedicated script, so a single command trains
+and evaluates with that config and its bonus flags baked in:
 
 | Script | Config | Demonstrates |
 | --- | --- | --- |
-| `scripts/train_mandatory_sgd.sh` | `models/mandatory_sgd.yaml` | Mandatory SGD + categorical cross-entropy |
-| `scripts/train_bonus_adam.sh` | `models/bonus_adam.yaml` | Bonus: Adam optimizer + weight decay |
+| `scripts/train_mandatory_sgd.sh` | `models/mandatory_sgd.yaml` | Mandatory SGD + binary cross-entropy |
+| `scripts/train_bonus_adam.sh` | `models/bonus_adam.yaml` | Bonus: Adam optimizer |
 | `scripts/train_bonus_early_stopping.sh` | `models/bonus_early_stopping.yaml` | Bonus: early stopping with best-epoch restore |
 | `scripts/train_bonus_history.sh` | `models/bonus_history.yaml` | Bonus: per-epoch history JSON + multi-metric curves |
 | `scripts/train_bonus_multiple_curves.sh` | `models/bonus_multiple_curves.yaml` | Bonus: monitors loss/accuracy/precision, multiple curves on one graph |
@@ -176,8 +165,6 @@ DATASET=data/data_test.csv MODEL_OUT=models/model.json ./scripts/train_bonus_mul
 ## Documentation
 
 - [Benchmarks & Performance](./BENCHMARK.md)
-- [Changelog](./CHANGELOG.md)
-- [Contributing](./CONTRIBUTING.md)
 
 ## License
 

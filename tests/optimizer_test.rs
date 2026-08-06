@@ -50,9 +50,7 @@ fn unit_gradients(network: &Network) -> Vec<LayerGradients> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// SGD
-// ---------------------------------------------------------------------------
+// --- SGD ---
 
 #[test]
 fn sgd_zero_gradient_leaves_weights_unchanged() {
@@ -86,9 +84,7 @@ fn sgd_unit_gradient_decreases_weights_by_lr() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Adam
-// ---------------------------------------------------------------------------
+// --- Adam ---
 
 #[test]
 fn adam_zero_gradient_leaves_weights_unchanged() {
@@ -117,8 +113,7 @@ fn adam_unit_gradient_updates_weights() {
 
 #[test]
 fn adam_bias_correction_at_step1() {
-    // At t=1, bias-corrected first moment m̂ = g/(1-β1) and second moment v̂ = g²/(1-β2).
-    // With unit gradients and lr=1: Δw = 1/(sqrt(1/(1-β2)) + ε).
+    // At t=1: m̂ = g/(1−β1), v̂ = g²/(1−β2); with unit gradients and lr=1, Δw = 1/(sqrt(1/(1−β2)) + ε).
     let mut net = tiny_network();
 
     // Zero-out all weights for a clean reference.
@@ -136,28 +131,22 @@ fn adam_bias_correction_at_step1() {
     let mut opt = Adam::new(lr, beta1, beta2, epsilon);
     opt.update(&mut net, &grads);
 
-    // At t=1 with unit gradients g=1:
-    //   m1 = (1−β1)·g = 0.1         m̂1 = m1/(1−β1^1) = 0.1/0.1 = 1.0
-    //   v1 = (1−β2)·g² = 0.001      v̂1 = v1/(1−β2^1) = 0.001/0.001 = 1.0
-    //   Δw = lr · m̂1 / (√v̂1 + ε) = 1.0 / (1.0 + ε) ≈ 1.0
+    // At t=1 with g=1: m1 = 0.1, m̂1 = 1.0; v1 = 0.001, v̂1 = 1.0; Δw = lr·m̂1/(√v̂1 + ε) ≈ 1.0
     let m_hat = 1.0_f64; // simplifies to 1.0 for unit gradient
     let v_hat = 1.0_f64;
     let expected_delta = lr * m_hat / (v_hat.sqrt() + epsilon);
 
-    for (i, j) in [(0usize, 0usize)] {
-        let actual = net.layers[0].weights[[i, j]];
-        let expected = -expected_delta;
-        let diff = (actual - expected).abs();
-        assert!(
-            diff < 1e-9,
-            "adam step-1 weight [{i},{j}]: got {actual}, expected {expected}"
-        );
-    }
+    let (i, j) = (0usize, 0usize);
+    let actual = net.layers[0].weights[[i, j]];
+    let expected = -expected_delta;
+    let diff = (actual - expected).abs();
+    assert!(
+        diff < 1e-9,
+        "adam step-1 weight [{i},{j}]: got {actual}, expected {expected}"
+    );
 }
 
-// ---------------------------------------------------------------------------
-// OptimizerType factory
-// ---------------------------------------------------------------------------
+// --- OptimizerType factory ---
 
 #[test]
 fn optimizer_type_factory_creates_correct_variant() {

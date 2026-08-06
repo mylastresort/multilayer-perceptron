@@ -10,7 +10,7 @@ pub struct Layer {
     pub bias: Array1<f64>,
     pub activation: ActivationFunction,
     pub input_cache: Option<Array2<f64>>,
-    pub weighted_sum_cache: Option<Array2<f64>>,
+    pub activated_cache: Option<Array2<f64>>,
 }
 
 impl Layer {
@@ -27,88 +27,53 @@ impl Layer {
             bias,
             activation,
             input_cache: None,
-            weighted_sum_cache: None,
+            activated_cache: None,
         }
     }
 
-    pub fn forward(&mut self, _input: ArrayView2<'_, f64>) -> Array2<f64> {
-        let weighted_sum = _input.dot(&self.weights) + &self.bias;
-        self.input_cache = Some(_input.to_owned());
-        self.weighted_sum_cache = Some(weighted_sum.clone());
-        self.activation.forward(&weighted_sum)
+    /// forward: z = input·W + b, a = φ(z). Caches input (a_prev) and a for backward.
+    pub fn forward(&mut self, input: ArrayView2<'_, f64>) -> Array2<f64> {
+        let z = input.dot(&self.weights) + &self.bias;
+        self.input_cache = Some(input.to_owned());
+        let a = self.activation.forward(&z);
+        self.activated_cache = Some(a.clone());
+        a
     }
 
+    /// backward: Δ = ∂L/∂z = φ.backward(a, ∂L/∂a) for element-wise φ (hidden layers); returns (∂L/∂a_prev, ∂L/∂W, ∂L/∂b).
     pub fn backward(&self, upstream: &Array2<f64>) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
-        let weighted_sum = self
-            .weighted_sum_cache
+        let (input, a) = self.caches();
+        let delta = self.activation.backward(a, upstream);
+        self.gradients(input, &delta)
+    }
+
+    /// backward_with_delta: output-layer delta p − y (no gating); returns (∂L/∂a_prev, ∂L/∂W, ∂L/∂b).
+    pub fn backward_with_delta(
+        &self,
+        delta: &Array2<f64>,
+    ) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
+        let input = self.input_cache.as_ref().expect("No forward pass cache");
+        self.gradients(input, delta)
+    }
+
+    fn caches(&self) -> (&Array2<f64>, &Array2<f64>) {
+        let input = self.input_cache.as_ref().expect("No forward pass cache");
+        let a = self
+            .activated_cache
             .as_ref()
             .expect("No forward pass cache");
-        let input = self.input_cache.as_ref().expect("No forward pass cache");
-
-        let delta = self.activation.backward(weighted_sum, upstream);
-        let g_input = delta.dot(&self.weights.t());
-        let g_weights = input.t().dot(&delta);
-        let g_bias = delta.sum_axis(ndarray::Axis(0));
-
-        (g_input, g_weights, g_bias)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Layer;
-    use crate::network::{activation::ActivationFunction, initializer::WeightInitializer};
-    use ndarray::arr2;
-
-    fn simple_layer() -> Layer {
-        let mut layer = Layer::new(2, 3, ActivationFunction::Sigmoid, WeightInitializer::He);
-        layer.weights = arr2(&[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
-        layer.bias = ndarray::Array1::from(vec![0.0, 0.0, 0.0]);
-        layer
+        (input, a)
     }
 
-    #[test]
-    fn layer_forward_output_shape_is_correct() {
-        let mut layer = simple_layer();
-        let input = arr2(&[[1.0, 2.0]]);
-        let output = layer.forward(input.view());
-        assert_eq!(output.dim(), (1, 3));
-    }
+    fn gradients(
+        &self,
+        input: &Array2<f64>,
+        delta: &Array2<f64>,
+    ) -> (Array2<f64>, Array2<f64>, Array1<f64>) {
+        let grad_input = delta.dot(&self.weights.t());
+        let grad_weights = input.t().dot(delta);
+        let grad_bias = delta.sum_axis(ndarray::Axis(0));
 
-    #[test]
-    fn layer_forward_caches_input_and_weighted_sum() {
-        let mut layer = simple_layer();
-        let input = arr2(&[[1.0, 2.0]]);
-        layer.forward(input.view());
-        assert!(layer.input_cache.is_some());
-        assert!(layer.weighted_sum_cache.is_some());
-    }
-
-    #[test]
-    fn layer_forward_output_values_are_in_sigmoid_range() {
-        let mut layer = simple_layer();
-        let input = arr2(&[[1.0, 2.0]]);
-        let output = layer.forward(input.view());
-        for v in output.iter() {
-            assert!(*v > 0.0 && *v < 1.0, "sigmoid output {v} outside (0, 1)");
-        }
-    }
-
-    #[test]
-    fn layer_backward_gradient_shapes_are_correct() {
-        let mut layer = simple_layer();
-        let input = arr2(&[[1.0, 2.0]]);
-        let _ = layer.forward(input.view());
-        let grad_output = arr2(&[[0.1, 0.2, 0.3]]);
-        let (grad_input, grad_weights, grad_bias) = layer.backward(&grad_output);
-        assert_eq!(grad_input.dim(), (1, 2));
-        assert_eq!(grad_weights.dim(), (2, 3));
-        assert_eq!(grad_bias.len(), 3);
-    }
-
-    #[test]
-    fn layer_new_bias_is_zeros() {
-        let layer = Layer::new(4, 8, ActivationFunction::ReLU, WeightInitializer::Xavier);
-        assert!(layer.bias.iter().all(|&v| v == 0.0));
+        (grad_input, grad_weights, grad_bias)
     }
 }

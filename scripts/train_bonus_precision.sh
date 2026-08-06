@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 CONFIG="models/bonus_precision.yaml"
-TRAIN_FLAGS="--early-stop-metric precision --early-stop-mode max --monitor-metrics loss,accuracy,precision"
+TRAIN_FLAGS="--early-stopping --early-stop-metric precision --early-stop-mode max --monitor-metrics loss,accuracy,precision"
 
 # shellcheck source=./_lib_train.sh
 source "$(dirname "$0")/_lib_train.sh"

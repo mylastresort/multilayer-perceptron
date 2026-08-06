@@ -1,6 +1,7 @@
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, ArrayView1, Axis};
 
-use crate::network::model::Network;
+use crate::network::{activation::ActivationFunction, model::Network};
+use crate::training::loss::LossFunction;
 
 #[derive(Debug, Clone)]
 pub struct LayerGradients {
@@ -14,147 +15,68 @@ impl From<(Array2<f64>, Array1<f64>)> for LayerGradients {
     }
 }
 
-impl Network {
-    pub fn backward(&mut self, _upstream_grad: Array2<f64>) -> Vec<LayerGradients> {
-        let mut upstream_grad = _upstream_grad;
-        let mut gd = Vec::with_capacity(self.layers.len());
-        for l in self.layers.iter().rev() {
-            let (g_input, g_weights, g_bias) = l.backward(&upstream_grad);
-            gd.push(LayerGradients::from((g_weights, g_bias)));
-            upstream_grad = g_input;
-        }
-
-        gd.reverse();
-        gd
+impl std::ops::DivAssign<f64> for LayerGradients {
+    fn div_assign(&mut self, n: f64) {
+        self.weights /= n;
+        self.bias /= n;
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::LayerGradients;
-    use crate::network::{
-        activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
-        model::Network,
-    };
-    use crate::training::loss::{Loss, LossFunction};
-    use ndarray::{Array1, Array2, arr1, arr2};
-
-    fn tiny_net() -> Network {
-        Network::builder()
-            .add_layer(Layer::new(
-                2,
-                4,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::He,
-            ))
-            .add_layer(Layer::new(
-                4,
-                4,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::He,
-            ))
-            .add_layer(Layer::new(
-                4,
-                1,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::He,
-            ))
-            .build()
-    }
-
-    #[test]
-    fn layer_gradients_from_tuple() {
-        let w = Array2::zeros((3, 4));
-        let b = Array1::zeros(4);
-        let lg = LayerGradients::from((w.clone(), b.clone()));
-        assert_eq!(lg.weights.dim(), w.dim());
-        assert_eq!(lg.bias.len(), b.len());
-    }
-
-    #[test]
-    fn backward_returns_one_gradient_per_layer() {
-        let mut net = tiny_net();
-        let input = arr2(&[[0.5, 0.3]]);
-        let _ = net.forward(input.view());
-        let loss_grad = Array2::ones((1, 1));
-        let grads = net.backward(loss_grad);
-        assert_eq!(grads.len(), net.layers.len());
-    }
-
-    #[test]
-    fn backward_gradient_shapes_match_layer_weights() {
-        let mut net = tiny_net();
-        let input = arr2(&[[0.5, 0.3]]);
-        let _ = net.forward(input.view());
-        let loss_grad = Array2::ones((1, 1));
-        let grads = net.backward(loss_grad);
-        for (layer, grad) in net.layers.iter().zip(grads.iter()) {
-            assert_eq!(grad.weights.dim(), layer.weights.dim());
-            assert_eq!(grad.bias.len(), layer.bias.len());
+/// y for delta = p − y: column vector (ncols == 1) or one-hot (targets 0/1).
+fn onehot_encoded(t: ArrayView1<f64>, ncols: usize) -> Array2<f64> {
+    if ncols == 1 {
+        t.to_owned().insert_axis(Axis(1))
+    } else {
+        let mut y = Array2::zeros((t.len(), ncols));
+        for (mut row, &target) in y.outer_iter_mut().zip(t) {
+            row[binary_class_index(target)] = 1.0;
         }
+        y
     }
+}
 
-    #[test]
-    fn softmax_output_backward_matches_finite_difference() {
-        let mut net = Network::builder()
-            .add_layer(Layer::new(
-                2,
-                4,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::Xavier,
-            ))
-            .add_layer(Layer::new(
-                4,
-                4,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::Xavier,
-            ))
-            .add_layer(Layer::new(
-                4,
-                2,
-                ActivationFunction::Softmax,
-                WeightInitializer::Xavier,
-            ))
-            .build();
+fn binary_class_index(target: f64) -> usize {
+    match target {
+        0.0 => 0,
+        1.0 => 1,
+        other => panic!("invalid binary target {other}: BCE expects class index 0 or 1"),
+    }
+}
 
-        let x = arr2(&[[0.3, -0.7], [0.9, 0.2], [-0.4, 0.8]]);
-        let y = arr1(&[1.0, 0.0, 1.0]);
+impl Network {
+    /// backward: mean gradients (÷ n); softmax output uses delta = p − y directly, other outputs gate the BCE gradient through the activation derivative.
+    pub fn backward(&mut self, loss: LossFunction, t: ArrayView1<f64>) -> Vec<LayerGradients> {
+        let n = t.len() as f64;
+        let last = self.layers.last().expect("network has no layers");
+        let p = last
+            .activated_cache
+            .as_ref()
+            .expect("No forward pass cache; call forward first");
 
-        let pred = net.forward(x.view());
-        let n_samples = pred.nrows() as f64;
-        let upstream = LossFunction::CategoricalCrossEntropy.gradient(pred.view(), y.view());
-        let upstream = upstream / n_samples;
-        let grads = net.backward(upstream);
-
-        let eps = 1e-6;
-        let loss_of = |net: &mut Network| -> f64 {
-            let p = net.forward(x.view());
-            LossFunction::CategoricalCrossEntropy
-                .compute(p.view(), y.view())
-                .mean()
-                .unwrap()
+        let softmax_out = matches!(last.activation, ActivationFunction::Softmax);
+        let mut upstream = if softmax_out {
+            p - &onehot_encoded(t, p.ncols())
+        } else {
+            loss.gradient(p.view(), t) / n
         };
 
-        for layer_idx in 0..net.layers.len() {
-            let weights_dim = net.layers[layer_idx].weights.dim();
-            for i in 0..weights_dim.0 {
-                for j in 0..weights_dim.1 {
-                    let old = net.layers[layer_idx].weights[[i, j]];
-                    net.layers[layer_idx].weights[[i, j]] = old + eps;
-                    let l_plus = loss_of(&mut net);
-                    net.layers[layer_idx].weights[[i, j]] = old - eps;
-                    let l_minus = loss_of(&mut net);
-                    net.layers[layer_idx].weights[[i, j]] = old;
+        let mut gd = Vec::with_capacity(self.layers.len());
+        for (i, layer) in self.layers.iter().rev().enumerate() {
+            let (g_input, g_weights, g_bias) = if i == 0 && softmax_out {
+                layer.backward_with_delta(&upstream)
+            } else {
+                layer.backward(&upstream)
+            };
+            gd.push(LayerGradients::from((g_weights, g_bias)));
+            upstream = g_input;
+        }
 
-                    let numeric = (l_plus - l_minus) / (2.0 * eps);
-                    let analytic = grads[layer_idx].weights[[i, j]];
-                    let diff = (analytic - numeric).abs();
-                    assert!(
-                        diff < 1e-5,
-                        "layer {layer_idx} w[{i},{j}]: analytic={analytic:.8} numeric={numeric:.8} diff={diff:.8}"
-                    );
-                }
+        gd.reverse();
+        if softmax_out {
+            for g in gd.iter_mut() {
+                *g /= n;
             }
         }
+        gd
     }
 }

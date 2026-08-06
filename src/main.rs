@@ -1,13 +1,11 @@
-mod app;
-
 use std::error::Error;
 
-use app::cli::{apply_net_overrides, parse_env_args};
-use app::display::{print_loaded_config, print_loaded_dataset, print_verbose_config};
-use app::predict::{PredictArgs, run_predict};
-use app::split::{SplitArgs, run_split};
-use app::training::{build_dataset, train_from_dataset};
-use app::types::{CliArgs, Subcommand};
+use mlp::app::cli::{apply_net_overrides, parse_env_args};
+use mlp::app::display::{print_loaded_config, print_loaded_dataset};
+use mlp::app::predict::{PredictArgs, run_predict};
+use mlp::app::split::{SplitArgs, run_split};
+use mlp::app::training::{build_dataset, train_from_dataset};
+use mlp::app::types::{CliArgs, Subcommand};
 use mlp::data::loader::Dataset;
 use mlp::network::config::NetworkConfig;
 use mlp::network::model::Network;
@@ -46,14 +44,6 @@ fn print_train_setup(
     network: &Network,
     network_config: &NetworkConfig,
 ) {
-    if cli_args.verbose {
-        print_verbose_config(
-            network_config,
-            &cli_args.dataset_path,
-            &cli_args.config_path,
-        );
-    }
-
     print_loaded_dataset(
         &cli_args.dataset_path,
         dataset.features.nrows(),

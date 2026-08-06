@@ -1,9 +1,8 @@
-learning_rate: 0.05
-epochs: 250
+learning_rate: 0.01
+epochs: 1250
 batch_size: 16
 optimizer: sgd
-weight_decay: 0.0
-loss: categorical_cross_entropy
+loss: binary_cross_entropy
 
 input_layers:
   - size: 30

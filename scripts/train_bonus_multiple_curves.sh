@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 CONFIG="models/bonus_multiple_curves.yaml"
-TRAIN_FLAGS="--monitor-metrics loss,accuracy,precision"
+TRAIN_FLAGS="--early-stopping --monitor-metrics loss,accuracy,precision"
 
 # shellcheck source=./_lib_train.sh
 source "$(dirname "$0")/_lib_train.sh"

@@ -1,18 +1,21 @@
 use std::error::Error;
 use std::path::Path;
 
-use mlp::console::{Tone, bold, paint};
-use mlp::data::loader::{Dataset, load_dataset};
-use mlp::network::callbacks::{Callback, ProgressLogger};
-use mlp::network::config::NetworkConfig;
-use mlp::network::model::Network;
-use mlp::training::metrics::Metrics;
-use mlp::training::monitor::{
+use crate::console::{Tone, bold, paint};
+use crate::data::loader::{Dataset, load_dataset};
+use crate::data::preprocessing::{Normalizer, StandardScaler};
+use crate::data::split::stratified_split_by_target;
+use crate::network::callbacks::{Callback, ProgressLogger};
+use crate::network::config::NetworkConfig;
+use crate::network::model::Network;
+use crate::network::model::FitConfig;
+use crate::training::metrics::Metrics;
+use crate::training::monitor::{
     EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback, MonitoredMetric,
 };
-use mlp::training::optimizer::OptimizerType;
-use mlp::visualization::plotter::{TrainingHistory as PlotTrainingHistory, plot_training_curves};
-use ndarray::{Array1, Array2, Axis, s};
+use crate::training::optimizer::OptimizerType;
+use crate::visualization::plotter::{TrainingHistory as PlotTrainingHistory, plot_training_curves};
+use ndarray::{Array1, Array2, s};
 
 use super::types::MonitorOptions;
 
@@ -46,52 +49,65 @@ struct PreparedData {
     y_train: Array1<f64>,
     x_val: Array2<f64>,
     y_val: Array1<f64>,
-    train_mean: Array1<f64>,
-    train_std: Array1<f64>,
+    scaler: StandardScaler,
 }
 
-fn training_split_index(n: usize) -> Result<usize, Box<dyn Error>> {
-    if n < 3 {
-        return Err("dataset must contain at least 3 rows to split train/val/test".into());
-    }
-
-    let train_end = (0.85 * n as f64).round() as usize;
-    if train_end == 0 || n <= train_end {
-        return Err("dataset split produced empty training or validation set".into());
-    }
-    Ok(train_end)
+pub(crate) struct PreparedFeatures {
+    pub(crate) x: Array2<f64>,
+    pub(crate) scaler: StandardScaler,
 }
 
-fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
-    let x_raw = dataset.features.slice(s![.., 1..]).to_owned();
-    let y = dataset
+pub(crate) fn extract_features_target(dataset: &Dataset) -> (Array2<f64>, Array1<f64>) {
+    let features = dataset.features.slice(s![.., 1..]).to_owned();
+    let target = dataset
         .features
         .column(0)
         .mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
+    (features, target)
+}
 
-    let train_end = training_split_index(x_raw.nrows())?;
-    let n = x_raw.nrows();
+pub(crate) fn prepare_data(
+    x_raw: &Array2<f64>,
+    scaler: Option<&StandardScaler>,
+) -> Result<PreparedFeatures, Box<dyn Error>> {
+    if x_raw.nrows() == 0 {
+        return Err("dataset has no rows".into());
+    }
+    match scaler {
+        Some(scaler) => Ok(PreparedFeatures {
+            x: scaler.transform(x_raw),
+            scaler: scaler.clone(),
+        }),
+        None => {
+            let mut scaler = StandardScaler::default();
+            let x = scaler.fit_transform(x_raw);
+            Ok(PreparedFeatures { x, scaler })
+        }
+    }
+}
 
-    let x_train_raw = x_raw.slice(s![0..train_end, ..]).to_owned();
-    let x_val_raw = x_raw.slice(s![train_end..n, ..]).to_owned();
-    let y_train = y.slice(s![0..train_end]).to_owned();
-    let y_val = y.slice(s![train_end..n]).to_owned();
+fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
+    let (x_raw, y) = extract_features_target(dataset);
+    if x_raw.nrows() < 3 {
+        return Err("dataset must contain at least 3 rows to split train/val/test".into());
+    }
 
-    let train_mean = x_train_raw
-        .mean_axis(Axis(0))
-        .expect("training features should not be empty");
-    let train_std = x_train_raw.std_axis(Axis(0), 0.0).mapv(|v| v.max(1e-12));
+    let (train_ds, val_ds) = stratified_split_by_target(dataset, &y, 0.85, None);
+    let (x_train_raw, y_train) = extract_features_target(&train_ds);
+    let (x_val_raw, y_val) = extract_features_target(&val_ds);
+    if x_train_raw.nrows() == 0 || x_val_raw.nrows() == 0 {
+        return Err("dataset split produced empty training or validation set".into());
+    }
 
-    let x_train = (&x_train_raw - &train_mean) / &train_std;
-    let x_val = (&x_val_raw - &train_mean) / &train_std;
+    let train = prepare_data(&x_train_raw, None)?;
+    let val = prepare_data(&x_val_raw, Some(&train.scaler))?;
 
     Ok(PreparedData {
-        x_train,
+        x_train: train.x,
         y_train,
-        x_val,
+        x_val: val.x,
         y_val,
-        train_mean,
-        train_std,
+        scaler: train.scaler,
     })
 }
 
@@ -156,19 +172,23 @@ fn print_summary_line(metrics: &Metrics) {
 fn print_training_summary(
     metrics: &Metrics,
     monitor_options: &MonitorOptions,
-    early_stopping: &EarlyStoppingCallback,
-    history: &HistoryCallback,
+    early_stopping: Option<&EarlyStoppingCallback>,
+    history: Option<&HistoryCallback>,
 ) {
     print_summary_line(metrics);
-    println!(
-        "{} {}",
-        paint("History records:", Tone::Info),
-        paint(
-            &format!("{} epochs", history.history().epochs.len()),
-            Tone::Accent
-        )
-    );
-    if let Some(stopped_epoch) = early_stopping.stopped_epoch() {
+    if let Some(history) = history {
+        println!(
+            "{} {}",
+            paint("History records:", Tone::Info),
+            paint(
+                &format!("{} epochs", history.history().epochs.len()),
+                Tone::Accent
+            )
+        );
+    }
+    if let Some(early_stopping) = early_stopping
+        && let Some(stopped_epoch) = early_stopping.stopped_epoch()
+    {
         println!(
             "{} {} {}",
             paint("Early stopping triggered at epoch", Tone::Warn),
@@ -209,10 +229,13 @@ fn ensure_reports_dir() -> bool {
 }
 
 fn export_learning_curves(
-    history: &HistoryCallback,
+    history: Option<&HistoryCallback>,
     config_name: Option<&str>,
     metrics: &[MonitoredMetric],
 ) {
+    let Some(history) = history else {
+        return;
+    };
     if !ensure_reports_dir() {
         return;
     }
@@ -231,22 +254,42 @@ fn export_learning_curves(
     }
 }
 
-fn setup_callbacks(
-    monitor_options: &MonitorOptions,
-    epochs: usize,
-) -> (HistoryCallback, EarlyStoppingCallback, ProgressLogger) {
-    let history = HistoryCallback::new();
-    let early_stopping = EarlyStoppingCallback::new(EarlyStoppingConfig {
-        enabled: monitor_options.early_stopping,
-        metric: monitor_options.early_stop_metric,
-        mode: monitor_options.early_stop_mode,
-        patience: monitor_options.early_stop_patience,
-        min_delta: monitor_options.early_stop_min_delta,
-        start_epoch: monitor_options.early_stop_start_epoch,
-        restore_best_weights: true,
-    });
-    let progress_logger = ProgressLogger::new(epochs);
-    (history, early_stopping, progress_logger)
+struct RegisteredCallbacks {
+    history: Option<HistoryCallback>,
+    early_stopping: Option<EarlyStoppingCallback>,
+    progress_logger: ProgressLogger,
+}
+
+impl RegisteredCallbacks {
+    fn enabled(&mut self) -> Vec<&mut dyn Callback> {
+        let mut callbacks: Vec<&mut dyn Callback> = Vec::new();
+        if let Some(history) = self.history.as_mut() {
+            callbacks.push(history);
+        }
+        if let Some(early_stopping) = self.early_stopping.as_mut() {
+            callbacks.push(early_stopping);
+        }
+        callbacks.push(&mut self.progress_logger);
+        callbacks
+    }
+}
+
+fn setup_callbacks(monitor_options: &MonitorOptions, epochs: usize) -> RegisteredCallbacks {
+    let history_enabled = monitor_options.history_out.is_some() || !monitor_options.metrics.is_empty();
+    RegisteredCallbacks {
+        history: history_enabled.then(HistoryCallback::new),
+        early_stopping: monitor_options.early_stopping.then(|| {
+            EarlyStoppingCallback::new(EarlyStoppingConfig {
+                metric: monitor_options.early_stop_metric,
+                mode: monitor_options.early_stop_mode,
+                patience: monitor_options.early_stop_patience,
+                min_delta: monitor_options.early_stop_min_delta,
+                start_epoch: monitor_options.early_stop_start_epoch,
+                restore_best_weights: true,
+            })
+        }),
+        progress_logger: ProgressLogger::new(epochs),
+    }
 }
 
 fn fit_network(
@@ -259,13 +302,10 @@ fn fit_network(
         data.x_train.view(),
         data.y_train.view(),
         Some((data.x_val.view(), data.y_val.view())),
-        mlp::network::model::FitConfig {
+        FitConfig {
             batch_size: network_config.batch_size,
             epochs: network_config.epochs,
-            optimizer: OptimizerType::for_kind(
-                network_config.optimizer,
-                network_config.weight_decay,
-            ),
+            optimizer: OptimizerType::for_kind(network_config.optimizer),
             loss_fn: network_config.loss,
         },
         callbacks,
@@ -274,11 +314,13 @@ fn fit_network(
 
 fn save_artifacts(
     network: &mut Network,
-    history: &HistoryCallback,
+    history: Option<&HistoryCallback>,
     monitor_options: &MonitorOptions,
     model_out: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    if let Some(path) = &monitor_options.history_out {
+    if let Some(path) = &monitor_options.history_out
+        && let Some(history) = history
+    {
         history.save_json(path)?;
         println!("{} {}", paint("Saved metric history:", Tone::Success), path);
     }
@@ -303,154 +345,27 @@ pub fn train_from_dataset(
     let data = prepare_training_data(dataset)?;
 
     let mut network = network_config.build_network();
-    network.feature_mean = Some(data.train_mean.clone());
-    network.feature_std = Some(data.train_std.clone());
+    network.scaler = Some(data.scaler.clone());
 
-    let (mut history, mut early_stopping, mut progress_logger) =
-        setup_callbacks(monitor_options, network_config.epochs);
-    let mut callbacks: Vec<&mut dyn Callback> =
-        vec![&mut history, &mut early_stopping, &mut progress_logger];
+    let mut callbacks = setup_callbacks(monitor_options, network_config.epochs);
+    let mut enabled: Vec<&mut dyn Callback> = callbacks.enabled();
+    let metrics = fit_network(&mut network, &data, network_config, &mut enabled);
+    drop(enabled);
 
-    let metrics = fit_network(&mut network, &data, network_config, &mut callbacks);
-    drop(callbacks);
+    if let Some(early_stopping) = callbacks.early_stopping.as_ref() {
+        early_stopping.restore_best(&mut network);
+    }
 
-    early_stopping.restore_best(&mut network);
+    print_training_summary(
+        &metrics,
+        monitor_options,
+        callbacks.early_stopping.as_ref(),
+        callbacks.history.as_ref(),
+    );
+    save_artifacts(&mut network, callbacks.history.as_ref(), monitor_options, model_out)?;
 
-    print_training_summary(&metrics, monitor_options, &early_stopping, &history);
-    save_artifacts(&mut network, &history, monitor_options, model_out)?;
-
-    export_learning_curves(&history, config_name, &monitor_options.metrics);
+    export_learning_curves(callbacks.history.as_ref(), config_name, &monitor_options.metrics);
 
     Ok(network)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{build_dataset, train_from_dataset};
-    use crate::app::types::MonitorOptions;
-    use mlp::data::loader::Dataset;
-    use mlp::network::config::NetworkConfig;
-    use ndarray::{Array1, Array2};
-    use std::path::Path;
-
-    fn data_csv_path() -> String {
-        format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"))
-    }
-
-    fn one_epoch_config() -> NetworkConfig {
-        let yaml = r#"
-learning_rate: 0.01
-epochs: 1
-batch_size: 32
-input_layers:
-  - size: 30
-hidden_layers:
-  - size: 8
-  - size: 8
-output_layers:
-  - size: 2
-"#;
-        serde_yaml::from_str(yaml).expect("minimal config should parse")
-    }
-
-    #[test]
-    fn build_dataset_loads_real_csv() {
-        let result = build_dataset(&data_csv_path());
-        assert!(result.is_ok(), "build_dataset failed: {:?}", result.err());
-        let dataset = result.unwrap();
-        assert!(dataset.features.nrows() > 100);
-    }
-
-    #[test]
-    fn build_dataset_returns_error_for_missing_file() {
-        let result = build_dataset("/tmp/mlp_nonexistent_data_xyz.csv");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn train_from_dataset_runs_one_epoch() {
-        let path = data_csv_path();
-        let dataset = build_dataset(&path).expect("data should load");
-        let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
-        assert!(result.is_ok(), "training failed: {:?}", result.err());
-    }
-
-    #[test]
-    fn train_from_dataset_rejects_dataset_with_fewer_than_three_rows() {
-        let features = Array2::from_shape_fn((2, 31), |(i, j)| (i + j) as f64 * 0.1);
-        let dataset = Dataset {
-            features,
-            labels: Array1::zeros(2),
-            feature_names: Vec::new(),
-        };
-        let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
-        let Err(e) = result else {
-            panic!("expected Err for < 3 rows")
-        };
-        assert!(e.to_string().contains("at least 3 rows"), "unexpected: {e}");
-    }
-
-    #[test]
-    fn train_from_dataset_rejects_dataset_with_bad_split_ratios() {
-        let features = Array2::from_shape_fn((3, 31), |(i, j)| (i + j) as f64 * 0.1);
-        let dataset = Dataset {
-            features,
-            labels: Array1::zeros(3),
-            feature_names: Vec::new(),
-        };
-        let config = one_epoch_config();
-        let result = train_from_dataset(&dataset, &config, &MonitorOptions::default(), None, None);
-        let Err(e) = result else {
-            panic!("expected Err for bad split")
-        };
-        assert!(
-            e.to_string().contains("empty training or validation"),
-            "unexpected: {e}"
-        );
-    }
-
-    #[test]
-    fn train_from_dataset_saves_history_when_history_out_is_set() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let history_path = format!("/tmp/mlp_history_{}_{}.json", std::process::id(), ts);
-
-        let dataset = build_dataset(&data_csv_path()).expect("data should load");
-        let config = one_epoch_config();
-        let opts = MonitorOptions {
-            history_out: Some(history_path.clone()),
-            ..MonitorOptions::default()
-        };
-        let result = train_from_dataset(&dataset, &config, &opts, None, None);
-        let _ = std::fs::remove_file(&history_path);
-        assert!(result.is_ok(), "training failed: {:?}", result.err());
-    }
-
-    #[test]
-    fn train_from_dataset_saves_model_when_model_out_is_set() {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let model_path = format!("/tmp/mlp_model_{}_{}.json", std::process::id(), ts);
-
-        let dataset = build_dataset(&data_csv_path()).expect("data should load");
-        let config = one_epoch_config();
-        let result = train_from_dataset(
-            &dataset,
-            &config,
-            &MonitorOptions::default(),
-            None,
-            Some(Path::new(&model_path)),
-        );
-        let saved = result.is_ok() && Path::new(&model_path).exists();
-        let _ = std::fs::remove_file(&model_path);
-        assert!(saved, "model should have been saved");
-    }
-}

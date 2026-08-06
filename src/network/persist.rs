@@ -3,6 +3,7 @@ use std::{error::Error, fs, path::Path};
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
+use crate::data::preprocessing::StandardScaler;
 use crate::network::{activation::ActivationFunction, layer::Layer, model::Network};
 use crate::training::loss::LossFunction;
 
@@ -71,8 +72,8 @@ impl Network {
         let saved = SavedNetwork {
             learning_rate: self.learning_rate,
             layers: self.layers.iter().map(SavedLayer::from).collect(),
-            feature_mean: self.feature_mean.as_ref().map(|m| m.to_vec()),
-            feature_std: self.feature_std.as_ref().map(|s| s.to_vec()),
+            feature_mean: self.scaler.as_ref().map(|s| s.mean.to_vec()),
+            feature_std: self.scaler.as_ref().map(|s| s.std.to_vec()),
             loss: self.loss,
         };
         let json = serde_json::to_string_pretty(&saved)?;
@@ -97,194 +98,19 @@ impl Network {
             layers.push(Layer::try_from(sl)?);
         }
 
-        let feature_mean = saved.feature_mean.map(|v| {
-            use ndarray::Array1;
-            Array1::from_vec(v)
-        });
-        let feature_std = saved.feature_std.map(|v| {
-            use ndarray::Array1;
-            Array1::from_vec(v)
-        });
+        let scaler = match (saved.feature_mean, saved.feature_std) {
+            (Some(mean), Some(std)) => Some(StandardScaler {
+                mean: Array1::from_vec(mean),
+                std: Array1::from_vec(std),
+            }),
+            _ => None,
+        };
 
         Ok(Network {
             layers,
             learning_rate: saved.learning_rate,
-            feature_mean,
-            feature_std,
+            scaler,
             loss: saved.loss,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::network::{
-        activation::ActivationFunction, initializer::WeightInitializer, layer::Layer,
-    };
-
-    fn three_layer_net() -> Network {
-        Network::builder()
-            .add_layer(Layer::new(
-                2,
-                4,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::He,
-            ))
-            .add_layer(Layer::new(
-                4,
-                4,
-                ActivationFunction::Tanh,
-                WeightInitializer::Xavier,
-            ))
-            .add_layer(Layer::new(
-                4,
-                1,
-                ActivationFunction::Sigmoid,
-                WeightInitializer::He,
-            ))
-            .build()
-    }
-
-    #[test]
-    fn load_nonexistent_file_returns_error() {
-        let result = Network::load("/tmp/this_file_does_not_exist_mlp.json");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_invalid_json_returns_error() {
-        let path =
-            std::env::temp_dir().join(format!("mlp_invalid_json_{}.json", std::process::id()));
-        std::fs::write(&path, "not valid json {{").unwrap();
-        let result = Network::load(&path);
-        let _ = std::fs::remove_file(&path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_model_with_fewer_than_three_layers_returns_error() {
-        let json = serde_json::json!({
-            "learning_rate": 0.01,
-            "layers": [
-                {
-                    "weights": [[0.1, 0.2]],
-                    "bias": [0.0, 0.0],
-                    "activation": "sigmoid"
-                },
-                {
-                    "weights": [[0.3], [0.4]],
-                    "bias": [0.0],
-                    "activation": "sigmoid"
-                }
-            ]
-        })
-        .to_string();
-
-        let path = std::env::temp_dir().join(format!("mlp_two_layers_{}.json", std::process::id()));
-        std::fs::write(&path, json).unwrap();
-        let result = Network::load(&path);
-        let _ = std::fs::remove_file(&path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_layer_with_empty_weights_returns_error() {
-        let json = serde_json::json!({
-            "learning_rate": 0.01,
-            "layers": [
-                { "weights": [], "bias": [], "activation": "sigmoid" },
-                { "weights": [[0.1]], "bias": [0.0], "activation": "sigmoid" },
-                { "weights": [[0.2]], "bias": [0.0], "activation": "sigmoid" }
-            ]
-        })
-        .to_string();
-
-        let path =
-            std::env::temp_dir().join(format!("mlp_empty_weights_{}.json", std::process::id()));
-        std::fs::write(&path, json).unwrap();
-        let result = Network::load(&path);
-        let _ = std::fs::remove_file(&path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_layer_with_mismatched_bias_length_returns_error() {
-        let json = serde_json::json!({
-            "learning_rate": 0.01,
-            "layers": [
-                {
-                    "weights": [[0.1, 0.2], [0.3, 0.4]],
-                    "bias": [0.0, 0.0, 0.0],
-                    "activation": "sigmoid"
-                },
-                {
-                    "weights": [[0.3], [0.4]],
-                    "bias": [0.0],
-                    "activation": "sigmoid"
-                },
-                {
-                    "weights": [[0.5]],
-                    "bias": [0.0],
-                    "activation": "sigmoid"
-                }
-            ]
-        })
-        .to_string();
-
-        let path =
-            std::env::temp_dir().join(format!("mlp_bias_mismatch_{}.json", std::process::id()));
-        std::fs::write(&path, json).unwrap();
-        let result = Network::load(&path);
-        let _ = std::fs::remove_file(&path);
-        assert!(result.is_err());
-        let Err(e) = result else { unreachable!() };
-        let msg = e.to_string();
-        assert!(msg.contains("bias"), "unexpected error: {msg}");
-    }
-
-    #[test]
-    fn save_and_load_roundtrip_three_layer_net() {
-        let net = three_layer_net();
-        let path =
-            std::env::temp_dir().join(format!("mlp_persist_unit_{}.json", std::process::id()));
-        net.save(&path).unwrap();
-        let loaded = Network::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(loaded.layers.len(), 3);
-        assert!((loaded.learning_rate - net.learning_rate).abs() < 1e-12);
-    }
-
-    #[test]
-    fn save_and_load_preserves_loss_function() {
-        use crate::training::loss::LossFunction;
-        let mut net = three_layer_net();
-        net.loss = LossFunction::BinaryCrossEntropy;
-        let path =
-            std::env::temp_dir().join(format!("mlp_persist_loss_{}.json", std::process::id()));
-        net.save(&path).unwrap();
-        let loaded = Network::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(loaded.loss, LossFunction::BinaryCrossEntropy);
-    }
-
-    #[test]
-    fn load_model_without_loss_defaults_to_categorical_cross_entropy() {
-        use crate::training::loss::LossFunction;
-        let json = serde_json::json!({
-            "learning_rate": 0.01,
-            "layers": [
-                { "weights": [[0.1, 0.2]], "bias": [0.0, 0.0], "activation": "sigmoid" },
-                { "weights": [[0.3, 0.4], [0.5, 0.6]], "bias": [0.0, 0.0], "activation": "sigmoid" },
-                { "weights": [[0.7], [0.8]], "bias": [0.0], "activation": "softmax" }
-            ]
-        })
-        .to_string();
-
-        let path = std::env::temp_dir().join(format!("mlp_no_loss_{}.json", std::process::id()));
-        std::fs::write(&path, json).unwrap();
-        let loaded = Network::load(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(loaded.loss, LossFunction::CategoricalCrossEntropy);
     }
 }

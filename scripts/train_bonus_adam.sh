@@ -7,6 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="models/bonus_adam.yaml"
 
+TRAIN_FLAGS="--early-stopping"
+
 # shellcheck source=./_lib_train.sh
 source "$(dirname "$0")/_lib_train.sh"
 run_pipeline
