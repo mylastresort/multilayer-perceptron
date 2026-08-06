@@ -218,7 +218,7 @@ impl Trainer {
         (total_loss, batch_index)
     }
 
-    /// apply_batch: forward, compute loss, backward (softmax → p − y, else BCE gradient gated), apply optimizer update.
+    /// apply_batch: forward, compute loss, backward (softmax → p − y, else loss gradient gated), apply optimizer update.
     fn apply_batch(
         &mut self,
         network: &mut Network,
