@@ -1,7 +1,10 @@
 use std::error::Error;
 
 use mlp::app::cli::{apply_net_overrides, parse_env_args};
-use mlp::app::display::{print_loaded_config, print_loaded_dataset};
+use mlp::app::display::{
+    print_loaded_config,
+    print_loaded_dataset
+};
 use mlp::app::predict::{PredictArgs, run_predict};
 use mlp::app::split::{SplitArgs, run_split};
 use mlp::app::training::{build_dataset, train_from_dataset};

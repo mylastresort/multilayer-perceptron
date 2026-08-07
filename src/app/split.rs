@@ -1,10 +1,8 @@
-use std::error::Error;
-use std::io::Write;
-
-use crate::data::loader::Dataset;
-use crate::data::split::stratified_split_by_target;
+use std::{error::Error, io::Write};
 
 use super::training::build_dataset;
+use crate::data::loader::Dataset;
+use crate::data::split::stratified_split_by_target;
 
 pub struct SplitArgs {
     pub dataset_path: String,
@@ -55,4 +53,3 @@ pub fn run_split(args: &SplitArgs) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-

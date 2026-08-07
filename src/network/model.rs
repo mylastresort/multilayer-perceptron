@@ -1,10 +1,12 @@
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
-use crate::{
-    data::preprocessing::StandardScaler,
-    network::{callbacks::Callback, layer::Layer},
-    training::{loss::LossFunction, metrics::Metrics, optimizer::OptimizerType, trainer::Trainer},
-};
+use crate::data::preprocessing::StandardScaler;
+use crate::network::callbacks::Callback;
+use crate::network::layer::Layer;
+use crate::training::loss::LossFunction;
+use crate::training::metrics::Metrics;
+use crate::training::optimizer::OptimizerType;
+use crate::training::trainer::Trainer;
 
 pub struct Network {
     pub layers: Vec<Layer>,

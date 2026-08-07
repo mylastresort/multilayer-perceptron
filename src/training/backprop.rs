@@ -1,6 +1,7 @@
 use ndarray::{Array1, Array2, ArrayView1};
 
-use crate::network::{activation::ActivationFunction, model::Network};
+use crate::network::activation::ActivationFunction;
+use crate::network::model::Network;
 use crate::training::loss::{LossFunction, onehot_targets};
 
 #[derive(Debug, Clone)]

@@ -4,7 +4,9 @@ use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
 use crate::data::preprocessing::StandardScaler;
-use crate::network::{activation::ActivationFunction, layer::Layer, model::Network};
+use crate::network::activation::ActivationFunction;
+use crate::network::layer::Layer;
+use crate::network::model::Network;
 use crate::training::loss::LossFunction;
 
 #[derive(Serialize, Deserialize)]

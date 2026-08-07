@@ -1,23 +1,31 @@
-use std::error::Error;
-use std::path::Path;
-
-use crate::console::{Tone, bold, paint};
+use std::{error::Error, path::Path};
+use crate::console::{bold, paint, Tone};
 use crate::data::loader::{Dataset, load_dataset};
 use crate::data::preprocessing::{Normalizer, StandardScaler};
 use crate::data::split::stratified_split_by_target;
-use crate::network::callbacks::{Callback, ProgressLogger};
+use crate::network::callbacks::{
+    Callback,
+    ProgressLogger,
+};
 use crate::network::config::NetworkConfig;
-use crate::network::model::Network;
-use crate::network::model::FitConfig;
+use crate::network::model::{Network, FitConfig};
 use crate::training::metrics::Metrics;
 use crate::training::monitor::{
-    EarlyStoppingCallback, EarlyStoppingConfig, HistoryCallback, MonitoredMetric,
+    EarlyStoppingCallback,
+    EarlyStoppingConfig,
+    HistoryCallback,
+    MonitoredMetric,
 };
 use crate::training::optimizer::OptimizerType;
-use crate::visualization::plotter::{TrainingHistory as PlotTrainingHistory, plot_training_curves};
+use crate::visualization::plotter::{
+    plot_training_curves,
+    TrainingHistory as PlotTrainingHistory
+};
 use ndarray::{Array1, Array2, s};
 
 use super::types::MonitorOptions;
+
+const DIAGNOSIS_COL: usize = 0;
 
 pub fn build_dataset(dataset_path: &str) -> Result<Dataset, Box<dyn Error>> {
     let base_features = vec![
@@ -44,12 +52,12 @@ pub fn build_dataset(dataset_path: &str) -> Result<Dataset, Box<dyn Error>> {
     load_dataset(dataset_path, 1, names, 0)
 }
 
-struct PreparedData {
-    x_train: Array2<f64>,
-    y_train: Array1<f64>,
-    x_val: Array2<f64>,
-    y_val: Array1<f64>,
-    scaler: StandardScaler,
+pub struct PreparedData {
+    pub x_train: Array2<f64>,
+    pub y_train: Array1<f64>,
+    pub x_val: Array2<f64>,
+    pub y_val: Array1<f64>,
+    pub scaler: StandardScaler,
 }
 
 pub(crate) struct PreparedFeatures {
@@ -61,7 +69,7 @@ pub(crate) fn extract_features_target(dataset: &Dataset) -> (Array2<f64>, Array1
     let features = dataset.features.slice(s![.., 1..]).to_owned();
     let target = dataset
         .features
-        .column(0)
+        .column(DIAGNOSIS_COL)
         .mapv(|v| if v >= 0.5 { 1.0 } else { 0.0 });
     (features, target)
 }
@@ -86,7 +94,7 @@ pub(crate) fn prepare_data(
     }
 }
 
-fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
+pub fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Error>> {
     let (x_raw, y) = extract_features_target(dataset);
     if x_raw.nrows() < 3 {
         return Err("dataset must contain at least 3 rows to split train/val/test".into());
@@ -109,29 +117,6 @@ fn prepare_training_data(dataset: &Dataset) -> Result<PreparedData, Box<dyn Erro
         y_val,
         scaler: train.scaler,
     })
-}
-
-fn timestamp_utc() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86_400);
-    let sod = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let yy = if m <= 2 { y + 1 } else { y };
-    let h = sod / 3600;
-    let mi = (sod % 3600) / 60;
-    let s = sod % 60;
-    format!("{yy:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}")
 }
 
 fn plot_history_from(history: &HistoryCallback) -> PlotTrainingHistory {
@@ -205,21 +190,22 @@ fn print_training_summary(
 }
 
 fn curve_file_path(config_name: Option<&str>) -> String {
-    let config_tag = config_name
-        .map(|name| format!("{name}_"))
-        .unwrap_or_default();
-    format!(
-        "reports/learning_curves_{config_tag}{}.png",
-        timestamp_utc()
-    )
+    match config_name {
+        Some(name) => format!("reports/learning_curve_{name}.png"),
+        None => "reports/learning_curve.png".to_string(),
+    }
 }
 
-fn ensure_reports_dir() -> bool {
-    if let Err(e) = std::fs::create_dir_all("reports") {
+fn ensure_parent_dir(path: &str) -> bool {
+    let parent = Path::new(path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if let Err(e) = std::fs::create_dir_all(parent) {
         eprintln!(
             "{} {e}",
             paint(
-                "Warning: could not create reports/ for learning curves:",
+                "Warning: could not create directory for learning curves:",
                 Tone::Warn
             )
         );
@@ -232,14 +218,17 @@ fn export_learning_curves(
     history: Option<&HistoryCallback>,
     config_name: Option<&str>,
     metrics: &[MonitoredMetric],
+    curves_out: Option<&str>,
 ) {
     let Some(history) = history else {
         return;
     };
-    if !ensure_reports_dir() {
+    let curve_path = curves_out
+        .map(str::to_string)
+        .unwrap_or_else(|| curve_file_path(config_name));
+    if !ensure_parent_dir(&curve_path) {
         return;
     }
-    let curve_path = curve_file_path(config_name);
     let plot_history = plot_history_from(history);
     match plot_training_curves(&plot_history, &curve_path, metrics) {
         Ok(()) => println!(
@@ -275,7 +264,8 @@ impl RegisteredCallbacks {
 }
 
 fn setup_callbacks(monitor_options: &MonitorOptions, epochs: usize) -> RegisteredCallbacks {
-    let history_enabled = monitor_options.history_out.is_some() || !monitor_options.metrics.is_empty();
+    let history_enabled =
+        monitor_options.history_out.is_some() || !monitor_options.metrics.is_empty();
     RegisteredCallbacks {
         history: history_enabled.then(HistoryCallback::new),
         early_stopping: monitor_options.early_stopping.then(|| {
@@ -362,10 +352,19 @@ pub fn train_from_dataset(
         callbacks.early_stopping.as_ref(),
         callbacks.history.as_ref(),
     );
-    save_artifacts(&mut network, callbacks.history.as_ref(), monitor_options, model_out)?;
+    save_artifacts(
+        &mut network,
+        callbacks.history.as_ref(),
+        monitor_options,
+        model_out,
+    )?;
 
-    export_learning_curves(callbacks.history.as_ref(), config_name, &monitor_options.metrics);
+    export_learning_curves(
+        callbacks.history.as_ref(),
+        config_name,
+        &monitor_options.metrics,
+        monitor_options.curves_out.as_deref(),
+    );
 
     Ok(network)
 }
-

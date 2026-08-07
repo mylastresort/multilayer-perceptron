@@ -2,19 +2,19 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rand::Rng;
 use rand::seq::SliceRandom;
 
-use crate::{
-    console::{Tone, bold, paint},
-    network::{
-        callbacks::{Callback, CallbackLogs},
-        model::Network,
-    },
-    training::{
-        batch::create_batches,
-        loss::{LossFunction, assert_binary_output},
-        metrics::{Metrics, compute_classification_scores_from_labels},
-        optimizer::Optimizer,
-    },
+use crate::console::{bold, paint, Tone};
+use crate::network::callbacks::{Callback, CallbackLogs};
+use crate::network::model::Network;
+use crate::training::batch::create_batches;
+use crate::training::loss::{
+    LossFunction,
+    assert_binary_output,
 };
+use crate::training::metrics::{
+    Metrics,
+    compute_classification_scores_from_labels
+};
+use crate::training::optimizer::Optimizer;
 
 fn make_epoch_logs(metrics: &Metrics, has_val: bool) -> CallbackLogs {
     CallbackLogs {
@@ -219,12 +219,7 @@ impl Trainer {
     }
 
     /// apply_batch: forward, compute loss, backward (softmax → p − y, else loss gradient gated), apply optimizer update.
-    fn apply_batch(
-        &mut self,
-        network: &mut Network,
-        x: &Array2<f64>,
-        t: &Array1<f64>,
-    ) -> f64 {
+    fn apply_batch(&mut self, network: &mut Network, x: &Array2<f64>, t: &Array1<f64>) -> f64 {
         let a = network.forward(x);
         let loss = self
             .loss_fn

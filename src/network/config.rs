@@ -2,10 +2,12 @@ use std::{error::Error, fs, path::Path};
 
 use serde::Deserialize;
 
-use crate::network::{
-    activation::ActivationFunction, initializer::WeightInitializer, layer::Layer, model::Network,
-};
-use crate::training::{loss::LossFunction, optimizer::OptimizerKind};
+use crate::network::activation::ActivationFunction;
+use crate::network::initializer::WeightInitializer;
+use crate::network::layer::Layer;
+use crate::network::model::Network;
+use crate::training::loss::LossFunction;
+use crate::training::optimizer::OptimizerKind;
 
 #[derive(Debug, Clone, Copy)]
 pub enum LayerGroup {

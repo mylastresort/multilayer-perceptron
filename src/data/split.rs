@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
 use ndarray::{Array1, Axis};
-use rand::prelude::SliceRandom;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, prelude::SliceRandom, rngs::StdRng};
 
 use crate::data::loader::Dataset;
 

@@ -1,14 +1,11 @@
 use std::error::Error;
 
+use super::training::{extract_features_target, build_dataset};
 use crate::data::preprocessing::Normalizer;
 use crate::network::model::Network;
 use crate::training::loss::assert_binary_output;
-use crate::training::metrics::{
-    ClassificationReport, compute_classification_report, compute_classification_scores_from_labels,
-};
+use crate::training::metrics::{ClassificationReport, compute_classification_report, compute_classification_scores_from_labels};
 use ndarray::Array2;
-
-use super::training::{build_dataset, extract_features_target};
 
 pub struct PredictArgs {
     pub dataset_path: String,
@@ -66,4 +63,3 @@ pub fn run_predict(args: &PredictArgs) -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-

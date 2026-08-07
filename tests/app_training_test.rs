@@ -1,4 +1,4 @@
-use mlp::app::training::{build_dataset, train_from_dataset};
+use mlp::app::training::{build_dataset, prepare_training_data, train_from_dataset};
 use mlp::app::types::MonitorOptions;
 use mlp::data::loader::Dataset;
 use mlp::network::config::NetworkConfig;
@@ -50,7 +50,13 @@ fn train_from_dataset_runs_one_epoch() {
 
 #[test]
 fn train_from_dataset_rejects_dataset_with_fewer_than_three_rows() {
-    let features = Array2::from_shape_fn((2, 31), |(i, j)| (i + j) as f64 * 0.1);
+    let features = Array2::from_shape_fn((2, 31), |(i, j)| {
+        if j == 0 {
+            i as f64
+        } else {
+            (i + j) as f64 * 0.1
+        }
+    });
     let dataset = Dataset {
         features,
         labels: Array1::zeros(2),
@@ -66,7 +72,13 @@ fn train_from_dataset_rejects_dataset_with_fewer_than_three_rows() {
 
 #[test]
 fn train_from_dataset_rejects_dataset_with_bad_split_ratios() {
-    let features = Array2::from_shape_fn((3, 31), |(i, j)| (i + j) as f64 * 0.1);
+    let features = Array2::from_shape_fn((3, 31), |(i, j)| {
+        if j == 0 {
+            (i % 2) as f64
+        } else {
+            (i + j) as f64 * 0.1
+        }
+    });
     let dataset = Dataset {
         features,
         labels: Array1::zeros(3),
@@ -124,4 +136,57 @@ fn train_from_dataset_saves_model_when_model_out_is_set() {
     let saved = result.is_ok() && Path::new(&model_path).exists();
     let _ = std::fs::remove_file(&model_path);
     assert!(saved, "model should have been saved");
+}
+
+#[test]
+fn train_from_dataset_saves_curves_when_curves_out_is_set() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let curve_path = format!("/tmp/mlp_curves_{}_{}.png", std::process::id(), ts);
+
+    let dataset = build_dataset(&data_csv_path()).expect("data should load");
+    let config = one_epoch_config();
+    let opts = MonitorOptions {
+        curves_out: Some(curve_path.clone()),
+        ..MonitorOptions::default()
+    };
+    let result = train_from_dataset(&dataset, &config, &opts, None, None);
+    let saved = result.is_ok() && Path::new(&curve_path).exists();
+    let _ = std::fs::remove_file(&curve_path);
+    assert!(saved, "curves should have been saved");
+}
+
+#[test]
+fn prepare_training_data_stratifies_on_diagnosis() {
+    let dataset = build_dataset(&data_csv_path()).expect("data should load");
+    let overall_positive = dataset
+        .features
+        .column(0)
+        .iter()
+        .filter(|v| **v >= 0.5)
+        .count() as f64
+        / dataset.features.nrows() as f64;
+
+    let data = prepare_training_data(&dataset).expect("training data should prepare");
+
+    assert!(
+        data.y_train.iter().all(|v| *v == 0.0 || *v == 1.0),
+        "train targets must be binary Diagnosis, got {:?}",
+        data.y_train
+    );
+    assert!(
+        (data.y_train.mean().unwrap() - overall_positive).abs() < 0.05,
+        "train Diagnosis proportion {} drifted from overall {}",
+        data.y_train.mean().unwrap(),
+        overall_positive
+    );
+    assert!(
+        (data.y_val.mean().unwrap() - overall_positive).abs() < 0.1,
+        "val Diagnosis proportion {} drifted from overall {}",
+        data.y_val.mean().unwrap(),
+        overall_positive
+    );
 }

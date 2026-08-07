@@ -7,7 +7,7 @@ learning_rate: 0.001
 epochs: 250
 batch_size: 16
 optimizer: adam
-loss: binary_cross_entropy
+loss: categorical_cross_entropy
 
 input_layers:
   - size: 30

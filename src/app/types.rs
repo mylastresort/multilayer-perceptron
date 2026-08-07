@@ -1,4 +1,5 @@
-use crate::training::monitor::{MonitorMode, MonitoredMetric};
+use crate::training::monitor::MonitorMode;
+use crate::training::monitor::MonitoredMetric;
 
 pub enum Subcommand {
     Split,
@@ -27,6 +28,7 @@ pub struct MonitorOptions {
     pub early_stop_min_delta: f64,
     pub early_stop_start_epoch: usize,
     pub history_out: Option<String>,
+    pub curves_out: Option<String>,
     pub metrics: Vec<MonitoredMetric>,
 }
 
@@ -40,6 +42,7 @@ impl Default for MonitorOptions {
             early_stop_min_delta: 0.0,
             early_stop_start_epoch: 0,
             history_out: None,
+            curves_out: None,
             metrics: vec![
                 MonitoredMetric::Loss,
                 MonitoredMetric::Accuracy,

@@ -111,8 +111,6 @@ fn binary_cross_entropy_gradient(
     grad
 }
 
-/// One-hot encode single-label binary targets (class indices 0/1); a single-output
-/// network returns the target column unchanged (ncols == 1).
 pub(crate) fn onehot_targets(targets: ArrayView1<'_, f64>, ncols: usize) -> Array2<f64> {
     if ncols == 1 {
         targets.to_owned().insert_axis(Axis(1))

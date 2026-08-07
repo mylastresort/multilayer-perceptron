@@ -60,7 +60,9 @@ impl Activation for ActivationFunction {
                 g * deriv
             }
             ActivationFunction::Softmax => {
-                panic!("softmax has no element-wise backward: it is output-only and its delta is p − y")
+                panic!(
+                    "softmax has no element-wise backward: it is output-only and its delta is p − y"
+                )
             }
         }
     }

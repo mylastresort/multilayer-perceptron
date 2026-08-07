@@ -1,7 +1,8 @@
 use ndarray::{Array1, Array2};
 use serde::Deserialize;
 
-use crate::{network::model::Network, training::backprop::LayerGradients};
+use crate::network::model::Network;
+use crate::training::backprop::LayerGradients;
 
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

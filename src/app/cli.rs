@@ -1,10 +1,9 @@
 use std::error::Error;
 
-use clap::{CommandFactory, Parser, Subcommand as ClapSubcommand};
+use super::types::{CliArgs, MonitorOptions, NetOverrides, Subcommand};
 use crate::network::config::NetworkConfig;
 use crate::training::monitor::{MonitorMode, MonitoredMetric, parse_monitored_metrics};
-
-use super::types::{CliArgs, MonitorOptions, NetOverrides, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand as ClapSubcommand};
 
 pub fn default_dataset_path() -> String {
     format!("{}/data/data.csv", env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +68,9 @@ struct RawCli {
 
     #[arg(long = "monitor-history-out", global = true, value_name = "PATH")]
     monitor_history_out: Option<String>,
+
+    #[arg(long = "curves-out", global = true, value_name = "PATH")]
+    curves_out: Option<String>,
 
     #[arg(short = 'l', long = "net-learning-rate", global = true)]
     net_learning_rate: Option<f64>,
@@ -165,6 +167,7 @@ fn monitor_options_from_raw(raw: &RawCli) -> Result<MonitorOptions, Box<dyn Erro
             .early_stop_start_epoch
             .unwrap_or(defaults.early_stop_start_epoch),
         history_out: raw.monitor_history_out.clone(),
+        curves_out: raw.curves_out.clone(),
         metrics: monitor_metrics_from_raw(raw, &defaults)?,
     })
 }
@@ -258,5 +261,3 @@ pub fn apply_net_overrides(
 
     Ok(())
 }
-
-
